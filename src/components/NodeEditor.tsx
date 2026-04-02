@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import ReactDOM from 'react-dom';
-import { WorkflowNode, ApproversValue, TimeoutValue, AdvanceNoticeValue } from '../types';
+import { WorkflowNode, ApproversValue, TimeoutValue, AdvanceNoticeValue, ScopeValue, ScopeAttribute } from '../types';
 import { motion } from 'motion/react';
 import { X, Plus, ChevronDown } from 'lucide-react';
-import { APPROVAL_ROLES, formatOperand } from '../lib/nodes';
+import { APPROVAL_ROLES, formatOperand, SCOPE_OPTIONS } from '../lib/nodes';
 
 interface NodeEditorProps {
   node: WorkflowNode;
@@ -39,6 +39,9 @@ export const NodeEditor: React.FC<NodeEditorProps> = ({ node, onClose, onSave, a
         </button>
       </div>
 
+      {node.type === 'scope' && (
+        <ScopeEditor value={value as ScopeValue} onChange={setValue} />
+      )}
       {node.type === 'approvers' && (
         <ApproversEditor value={value as ApproversValue} onChange={setValue} />
       )}
@@ -298,3 +301,59 @@ const AdvanceNoticeEditor: React.FC<AdvanceNoticeEditorProps> = ({ value, onChan
     </div>
   </div>
 );
+
+// ─── Scope Editor ─────────────────────────────────────────────────────────────
+
+const SCOPE_ATTRIBUTES: { value: ScopeAttribute; label: string }[] = [
+  { value: 'all', label: 'All Employees' },
+  { value: 'location_country', label: 'Country' },
+  { value: 'location_state', label: 'State' },
+  { value: 'department', label: 'Department' },
+  { value: 'division', label: 'Division' },
+  { value: 'employment_status', label: 'Employment Status' },
+  { value: 'team', label: 'Team' },
+];
+
+interface ScopeEditorProps {
+  value: ScopeValue;
+  onChange: (v: ScopeValue) => void;
+}
+
+const ScopeEditor: React.FC<ScopeEditorProps> = ({ value, onChange }) => {
+  const options = value.attribute !== 'all' ? SCOPE_OPTIONS[value.attribute] ?? [] : [];
+
+  return (
+    <div className="space-y-3">
+      <div className="relative">
+        <select
+          value={value.attribute}
+          onChange={(e) => {
+            const attr = e.target.value as ScopeAttribute;
+            onChange({ attribute: attr, value: attr === 'all' ? '' : (SCOPE_OPTIONS[attr]?.[0] ?? '') });
+          }}
+          className="w-full appearance-none text-sm border border-slate-200 rounded-xl pl-3 pr-8 py-2.5 focus:ring-2 focus:ring-indigo-500/20 outline-none bg-white cursor-pointer"
+        >
+          {SCOPE_ATTRIBUTES.map((a) => (
+            <option key={a.value} value={a.value}>{a.label}</option>
+          ))}
+        </select>
+        <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+      </div>
+
+      {value.attribute !== 'all' && (
+        <div className="relative">
+          <select
+            value={value.value}
+            onChange={(e) => onChange({ ...value, value: e.target.value })}
+            className="w-full appearance-none text-sm border border-slate-200 rounded-xl pl-3 pr-8 py-2.5 focus:ring-2 focus:ring-indigo-500/20 outline-none bg-white cursor-pointer"
+          >
+            {options.map((opt) => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+          <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+        </div>
+      )}
+    </div>
+  );
+};

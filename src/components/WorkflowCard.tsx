@@ -3,20 +3,26 @@ import { Workflow, Message } from '../types';
 import { WorkflowSentence } from './WorkflowSentence';
 import { processWorkflowEdit } from '../lib/gemini';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Send, Check, X, Loader2, Bot, User } from 'lucide-react';
+import { Sparkles, Pencil, Send, Check, X, Loader2, Bot, User, Trash2 } from 'lucide-react';
 
 interface WorkflowCardProps {
   liveWorkflow: Workflow;
   onUpdateLiveNode: (nodeId: string, newValue: any) => void;
+  initiallyEditing?: boolean;
+  isNew?: boolean;
   onApply: (workflow: Workflow) => void;
+  onDelete?: () => void;
 }
 
 export const WorkflowCard: React.FC<WorkflowCardProps> = ({
   liveWorkflow,
   onUpdateLiveNode,
   onApply,
+  onDelete,
+  initiallyEditing = false,
+  isNew = false,
 }) => {
-  const [isEditing, setIsEditing] = useState(false);
+  const [isEditing, setIsEditing] = useState(initiallyEditing);
   const [draft, setDraft] = useState<Workflow>(liveWorkflow);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -89,9 +95,10 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
       setMessages((prev) => [...prev, { role: 'model', content: explanation }]);
     } catch (err) {
       console.error('AI error:', err);
+      const msg = err instanceof Error ? err.message : String(err);
       setMessages((prev) => [
         ...prev,
-        { role: 'model', content: "Sorry, something went wrong. Please try again." },
+        { role: 'model', content: `Error: ${msg}` },
       ]);
     } finally {
       setIsLoading(false);
@@ -104,34 +111,46 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
   return (
     <div className="glass-panel rounded-2xl overflow-hidden max-w-3xl w-full group">
       {/* ── Live Section ─────────────────────────────────────── */}
-      <div className="p-8">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-2">
-            <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400">
-              Active Workflow
-            </h2>
-            {isEditing && (
-              <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full uppercase tracking-wider">
-                Live
-              </span>
+      {!isNew && (
+        <div className="p-8">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-2">
+              <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+                Active Workflow
+              </h2>
+              {isEditing && (
+                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                  Live
+                </span>
+              )}
+            </div>
+            {!isEditing && (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={handleOpenEdit}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-bold hover:bg-indigo-100 transition-all"
+                >
+                  <Pencil size={12} />
+                  Edit Workflow
+                </button>
+                {onDelete && (
+                  <button
+                    onClick={onDelete}
+                    className="p-1.5 text-slate-300 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
             )}
           </div>
-          {!isEditing && (
-            <button
-              onClick={handleOpenEdit}
-              className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-bold hover:bg-indigo-100 transition-all opacity-0 group-hover:opacity-100"
-            >
-              <Sparkles size={12} />
-              Edit Workflow
-            </button>
-          )}
-        </div>
 
-        <WorkflowSentence
-          workflow={liveWorkflow}
-          readOnly={true}
-        />
-      </div>
+          <WorkflowSentence
+            workflow={liveWorkflow}
+            readOnly={true}
+          />
+        </div>
+      )}
 
       {/* ── Draft + AI Section (expandable) ──────────────────── */}
       <AnimatePresence>
@@ -144,43 +163,64 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
             transition={{ type: 'spring', damping: 28, stiffness: 220 }}
             className="overflow-hidden"
           >
-            <div className="border-t border-slate-200 bg-slate-50/60">
+            <div className={`bg-slate-50/60 ${!isNew ? 'border-t border-slate-200' : ''}`}>
               {/* Draft header */}
               <div className="px-8 pt-6 pb-4 flex items-center justify-between flex-wrap gap-3">
                 <div className="flex items-center gap-2.5">
-                  <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full uppercase tracking-wider">
-                    Draft
-                  </span>
+                  {isNew ? (
+                    <span className="text-[10px] font-bold bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                      New
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                      Draft
+                    </span>
+                  )}
                   <span className="text-xs text-slate-400">
-                    Changes preview here before going live
+                    {isNew ? 'Describe the workflow you want to create' : 'Changes preview here before going live'}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={handleDiscard}
+                    onClick={isNew ? onDelete : handleDiscard}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 border border-slate-200 bg-white rounded-lg text-xs font-semibold hover:bg-slate-50 transition-colors"
                   >
-                    <X size={12} /> Discard
+                    <X size={12} /> {isNew ? 'Cancel' : 'Discard'}
                   </button>
-                  <button
-                    onClick={handleApply}
-                    disabled={!hasDraftChanges}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <Check size={12} /> Apply Changes
-                  </button>
+                  {!isNew && (
+                    <button
+                      onClick={handleApply}
+                      disabled={!hasDraftChanges}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <Check size={12} /> Apply Changes
+                    </button>
+                  )}
                 </div>
               </div>
 
-              {/* Draft workflow sentence */}
-              <div className="px-8 pb-5">
-                <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
-                  <WorkflowSentence
-                    workflow={draft}
-                    onUpdateNode={handleUpdateDraftNode}
-                  />
+              {/* Draft workflow sentence — hidden for new workflows until AI has responded */}
+              {(!isNew || messages.length > 0) && (
+                <div className="px-8 pb-5">
+                  <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+                    <WorkflowSentence
+                      workflow={draft}
+                      onUpdateNode={handleUpdateDraftNode}
+                    />
+                  </div>
+                  {isNew && (
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        onClick={handleApply}
+                        disabled={!hasDraftChanges}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <Check size={12} /> Create Workflow
+                      </button>
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
 
               {/* AI chat messages */}
               {messages.length > 0 && (
@@ -246,7 +286,7 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
                         type="text"
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
-                        placeholder='Try "Add CEO approval for same-day requests"'
+                        placeholder={isNew ? 'Describe what you want this workflow to do...' : 'Try "Add CEO approval for same-day requests"'}
                         className="w-full bg-white border border-slate-200 rounded-xl py-3 pl-9 pr-4 text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
                         disabled={isLoading}
                       />
