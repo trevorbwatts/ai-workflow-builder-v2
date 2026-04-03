@@ -1,9 +1,11 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import ReactDOM from 'react-dom';
 import { Workflow, Message } from '../types';
 import { WorkflowSentence } from './WorkflowSentence';
 import { processWorkflowEdit } from '../lib/gemini';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Pencil, Send, Check, X, Loader2, Bot, User, Trash2, MoreHorizontal, Copy } from 'lucide-react';
+import { Sparkles, Pencil, Send, Check, X, Loader2, Bot, User, Trash2, MoreHorizontal, Copy, Eye } from 'lucide-react';
+import { WorkflowPreview } from './WorkflowPreview';
 
 interface WorkflowCardProps {
   liveWorkflow: Workflow;
@@ -11,6 +13,7 @@ interface WorkflowCardProps {
   onApply: (workflow: Workflow) => void;
   onDelete?: () => void;
   onDuplicate?: () => void;
+  groupName: string;
   initiallyEditing?: boolean;
   isDraft?: boolean;
   isDuplicateDraft?: boolean;
@@ -24,6 +27,7 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
   onApply,
   onDelete,
   onDuplicate,
+  groupName,
   initiallyEditing = false,
   isDraft = false,
   isDuplicateDraft = false,
@@ -36,9 +40,12 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuPortalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -46,7 +53,9 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+      const inButton = menuRef.current?.contains(e.target as Node);
+      const inPortal = menuPortalRef.current?.contains(e.target as Node);
+      if (!inButton && !inPortal) setMenuOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -144,25 +153,35 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
           {!isEditing && (
             <div ref={menuRef} className="relative">
               <button
-                onClick={() => setMenuOpen((o) => !o)}
+                onClick={(e) => {
+                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  setMenuRect(rect);
+                  setMenuOpen((o) => !o);
+                }}
                 className="flex items-center px-2.5 py-1.5 border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-50 hover:border-slate-300 transition-all"
               >
                 <MoreHorizontal size={16} />
               </button>
-              <AnimatePresence>
-                {menuOpen && (
+              {menuOpen && menuRect && ReactDOM.createPortal(
                   <motion.div
                     initial={{ opacity: 0, y: -4, scale: 0.97 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -4, scale: 0.97 }}
                     transition={{ duration: 0.1 }}
-                    className="absolute right-0 top-full mt-1 w-48 bg-white border border-slate-200 rounded-xl shadow-lg overflow-visible z-50"
+                    ref={menuPortalRef}
+                    style={{ position: 'fixed', top: menuRect.bottom + 4, right: window.innerWidth - menuRect.right, zIndex: 9999 }}
+                    className="w-48 bg-white border border-slate-200 rounded-xl shadow-lg overflow-visible"
                   >
                     <button
                       onClick={() => { handleOpenEdit(); setMenuOpen(false); }}
                       className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 text-left rounded-t-xl"
                     >
                       <Pencil size={13} className="shrink-0" /> Edit Workflow
+                    </button>
+                    <button
+                      onClick={() => { setShowPreview(true); setMenuOpen(false); }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 text-left border-t border-slate-100"
+                    >
+                      <Eye size={13} className="shrink-0" /> Preview Workflow
                     </button>
                     <button
                       onClick={() => { onDuplicate?.(); setMenuOpen(false); }}
@@ -189,9 +208,9 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
                         </div>
                       )}
                     </div>
-                  </motion.div>
+                  </motion.div>,
+                  document.body
                 )}
-              </AnimatePresence>
             </div>
           )}
         </div>
@@ -234,6 +253,12 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
                     className="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 border border-slate-200 bg-white rounded-lg text-xs font-semibold hover:bg-slate-50 transition-colors"
                   >
                     <X size={12} /> {isDraft ? 'Cancel' : 'Discard'}
+                  </button>
+                  <button
+                    onClick={() => setShowPreview(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 border border-slate-200 bg-white rounded-lg text-xs font-semibold hover:bg-slate-50 transition-colors"
+                  >
+                    <Eye size={12} /> Preview
                   </button>
                   <button
                     onClick={handleApply}
@@ -339,6 +364,14 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {showPreview && (
+        <WorkflowPreview
+          workflow={isEditing || isDraft ? draft : liveWorkflow}
+          groupName={groupName}
+          onClose={() => setShowPreview(false)}
+        />
+      )}
     </div>
   );
 };

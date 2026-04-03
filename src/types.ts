@@ -1,6 +1,7 @@
 export interface ApproversValue {
   operator: 'AND' | 'OR';
   operands: string[];
+  backup?: string; // operand string: 'person:Jane Smith', 'role:HR Manager', 'manager', etc.
 }
 
 export interface TimeoutValue {
@@ -35,8 +36,14 @@ export interface TimeOffTypeValue {
   attribute: TimeOffTypeAttribute;
 }
 
-export type NodeType = 'approvers' | 'timeout' | 'advance_notice' | 'scope' | 'time_off_type';
-export type NodeValue = ApproversValue | TimeoutValue | AdvanceNoticeValue | ScopeValue | TimeOffTypeValue;
+export type StatusTrigger = 'out_of_office' | 'on_leave' | 'terminated';
+
+export interface StatusConditionValue {
+  triggers: StatusTrigger[];
+}
+
+export type NodeType = 'approvers' | 'timeout' | 'advance_notice' | 'scope' | 'time_off_type' | 'status_condition';
+export type NodeValue = ApproversValue | TimeoutValue | AdvanceNoticeValue | ScopeValue | TimeOffTypeValue | StatusConditionValue;
 
 export interface WorkflowNode {
   id: string;

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactDOM from 'react-dom';
-import { WorkflowNode, ApproversValue, TimeoutValue, AdvanceNoticeValue, ScopeValue, ScopeAttribute, TimeOffTypeValue, TimeOffTypeAttribute } from '../types';
+import { WorkflowNode, ApproversValue, TimeoutValue, AdvanceNoticeValue, ScopeValue, ScopeAttribute, TimeOffTypeValue, TimeOffTypeAttribute, StatusConditionValue, StatusTrigger } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Plus, ChevronDown, Check } from 'lucide-react';
 import { APPROVAL_ROLES, formatOperand, SCOPE_OPTIONS } from '../lib/nodes';
@@ -140,6 +140,9 @@ export const NodeEditor: React.FC<NodeEditorProps> = ({ node, onClose, onSave, a
       )}
       {node.type === 'advance_notice' && (
         <AdvanceNoticeEditor value={value as AdvanceNoticeValue} onChange={setValue} />
+      )}
+      {node.type === 'status_condition' && (
+        <StatusConditionEditor value={value as StatusConditionValue} onChange={setValue} />
       )}
 
       <button
@@ -281,6 +284,25 @@ const ApproversEditor: React.FC<ApproversEditorProps> = ({ value, onChange }) =>
       >
         <Plus size={13} /> Add Person
       </button>
+
+      {/* Backup Approver */}
+      <div className="pt-1 border-t border-slate-100">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Backup Approver</p>
+        {value.backup ? (
+          <OperandRow
+            op={value.backup}
+            onChange={(newOp) => onChange({ ...value, backup: newOp })}
+            onRemove={() => onChange({ ...value, backup: undefined })}
+          />
+        ) : (
+          <button
+            onClick={() => onChange({ ...value, backup: 'manager' })}
+            className="w-full py-2 border border-dashed border-slate-200 rounded-xl text-slate-400 hover:text-indigo-500 hover:border-indigo-200 transition-all flex items-center justify-center gap-2 text-xs font-medium"
+          >
+            <Plus size={13} /> Add Backup
+          </button>
+        )}
+      </div>
     </div>
   );
 };
@@ -467,6 +489,57 @@ const ScopeEditor: React.FC<ScopeEditorProps> = ({ value, onChange, hasMultipleV
           options={options.map((o) => ({ value: o, label: o }))}
         />
       )}
+    </div>
+  );
+};
+
+// ─── Status Condition Editor ──────────────────────────────────────────────────
+
+const STATUS_TRIGGERS: { value: StatusTrigger; label: string }[] = [
+  { value: 'out_of_office', label: 'Out of Office' },
+  { value: 'on_leave', label: 'On Leave' },
+  { value: 'terminated', label: 'Terminated' },
+];
+
+interface StatusConditionEditorProps {
+  value: StatusConditionValue;
+  onChange: (v: StatusConditionValue) => void;
+}
+
+const StatusConditionEditor: React.FC<StatusConditionEditorProps> = ({ value, onChange }) => {
+  const toggle = (trigger: StatusTrigger) => {
+    const current = value.triggers;
+    if (current.includes(trigger)) {
+      if (current.length === 1) return; // must keep at least one
+      onChange({ triggers: current.filter((t) => t !== trigger) });
+    } else {
+      onChange({ triggers: [...current, trigger] });
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] text-slate-400">Forward request when approver is:</p>
+      <div className="flex flex-col gap-2">
+        {STATUS_TRIGGERS.map(({ value: trigger, label }) => {
+          const active = value.triggers.includes(trigger);
+          return (
+            <button
+              key={trigger}
+              type="button"
+              onClick={() => toggle(trigger)}
+              className={`flex items-center justify-between px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                active
+                  ? 'bg-amber-50 border-amber-200 text-amber-800'
+                  : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
+              }`}
+            >
+              {label}
+              {active && <Check size={13} className="text-amber-500 shrink-0" />}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 };

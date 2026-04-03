@@ -476,6 +476,7 @@ export default function App() {
                       onApply={handleApply}
                       onDelete={selectedGroup.variants.length > 1 ? () => handleDeleteVariant(variant.id) : undefined}
                       onDuplicate={() => handleDuplicateVariant(variant.id)}
+                      groupName={selectedGroup.name}
                       initiallyEditing={variant.id === newestVariantId}
                       isDraft={variant.id === newestVariantId}
                       isDuplicateDraft={duplicateDraftIds.has(variant.id)}

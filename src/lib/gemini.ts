@@ -29,7 +29,10 @@ Rules:
 - Every {placeholder} in the template MUST have a matching key in "nodes"
 - The {scope} node must always remain first in the template
 - Node IDs must be lowercase_with_underscores
-- Template text must read as a natural, complete sentence
+- Template text must read as natural, complete sentences
+- Escalation rules (timeout + escalation node, or status_condition + backup node) MUST appear as their own sentence at the END of the template, never embedded inline mid-sentence
+  Example: "...{approvers}. If not approved within {timeout}, forwarded to {escalation}."
+  Example: "...{approvers}. If approver is {status_condition}, forwarded to {backup_approver}."
 - Be concise in your explanation (1-2 sentences)
 - NEVER use {placeholder} syntax in your explanation text
 - Respond ONLY with valid JSON matching this exact shape:

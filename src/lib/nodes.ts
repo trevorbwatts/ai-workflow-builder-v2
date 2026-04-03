@@ -1,4 +1,4 @@
-import { NodeType, NodeValue, ApproversValue, ScopeValue, TimeoutValue, AdvanceNoticeValue, TimeOffTypeValue } from '../types';
+import { NodeType, NodeValue, ApproversValue, ScopeValue, TimeoutValue, AdvanceNoticeValue, TimeOffTypeValue, StatusConditionValue } from '../types';
 
 export const APPROVAL_ROLES = [
   'CEO', 'CFO', 'COO',
@@ -58,6 +58,18 @@ export function displayTimeOffTypeValue(v: TimeOffTypeValue): string {
   }
 }
 
+export function displayStatusConditionValue(v: StatusConditionValue): string {
+  const labels: Record<string, string> = {
+    out_of_office: 'Out of Office',
+    on_leave: 'On Leave',
+    terminated: 'Terminated',
+  };
+  const parts = v.triggers.map((t) => labels[t] ?? t);
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} or ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')}, or ${parts[parts.length - 1]}`;
+}
+
 export function displayNodeValue(type: NodeType, value: NodeValue): string {
   if (type === 'scope') {
     return displayScopeValue(value as ScopeValue);
@@ -82,6 +94,9 @@ export function displayNodeValue(type: NodeType, value: NodeValue): string {
     const unitLabel = v.amount === 1 ? v.unit.replace(/s$/, '') : v.unit;
     return `${v.amount} ${unitLabel}`;
   }
+  if (type === 'status_condition') {
+    return displayStatusConditionValue(value as StatusConditionValue);
+  }
   return '';
 }
 
@@ -102,4 +117,11 @@ AVAILABLE NODE TYPES (you may ONLY use these):
 
 4. "advance_notice" — A time threshold for a conditional branch.
    value shape: { amount: number, unit: "hours" | "days", comparison: "less_than" | "greater_than" }
+
+5. "status_condition" — A condition that triggers routing when the approver has a specific status.
+   value shape: { triggers: Array<"out_of_office" | "on_leave" | "terminated"> }
+   At least one trigger must be present.
+   IMPORTANT: Always place the status_condition and its backup approver as a SEPARATE SENTENCE at the END of the template, after the main approval flow. Never embed it inline in the middle of a sentence.
+   Correct pattern: "...{main_approvers}. If approver is {status_condition}, forwarded to {backup_approver}."
+   Wrong pattern:   "...{main_approvers}, but if approver is {status_condition} it goes to {backup_approver}, then..."
 `;
