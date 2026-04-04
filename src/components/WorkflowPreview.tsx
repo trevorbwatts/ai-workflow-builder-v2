@@ -2,9 +2,9 @@ import React from 'react';
 import { Workflow, TimeoutValue, ScopeValue, TimeOffTypeValue, StatusConditionValue, ApproversValue } from '../types';
 import { displayNodeValue, displayScopeValue, displayTimeOffTypeValue, displayStatusConditionValue, formatOperand } from '../lib/nodes';
 import { motion } from 'motion/react';
-import { User, Bell, Clock, CheckCircle2, X, UserX } from 'lucide-react';
+import { User, Bell, Star, X, ThumbsUp, ThumbsDown, Clock, UserX } from 'lucide-react';
 
-// ─── Step Types ───────────────────────────────────────────────────────────────
+// ─── Step Types & Parser ──────────────────────────────────────────────────────
 
 type StepKind = 'start' | 'notify' | 'fork' | 'condition_fork' | 'end';
 
@@ -19,56 +19,52 @@ interface TimelineStep {
   backup?: string;
 }
 
-// ─── Parser ───────────────────────────────────────────────────────────────────
-
-function formatTimeout(v: TimeoutValue): string {
-  const unit = v.amount === 1 ? v.unit.replace(/s$/, '') : v.unit;
-  return `${v.amount} ${unit}`;
+function fmt(v: TimeoutValue): string {
+  const u = v.amount === 1 ? v.unit.replace(/s$/, '') : v.unit;
+  return `${v.amount} ${u}`;
 }
 
 function parseWorkflowSteps(workflow: Workflow): TimelineStep[] {
-  const placeholders = (workflow.template.match(/\{([^{}]+)\}/g) ?? []).map((p) => p.slice(1, -1).trim());
+  const ids = (workflow.template.match(/\{([^{}]+)\}/g) ?? []).map((p) => p.slice(1, -1).trim());
   const steps: TimelineStep[] = [];
   let hasRequester = false;
-
   let i = 0;
-  while (i < placeholders.length) {
-    const nodeId = placeholders[i];
-    const node = workflow.nodes[nodeId];
 
+  while (i < ids.length) {
+    const id = ids[i];
+    const node = workflow.nodes[id];
     if (!node || node.type === 'scope' || node.type === 'time_off_type') { i++; continue; }
 
-    if (node.type === 'approvers' && nodeId === 'requester') {
+    if (node.type === 'approvers' && id === 'requester') {
       hasRequester = true;
       steps.push({ kind: 'start', actor: displayNodeValue(node.type, node.value), description: 'initiates the request' });
       i++; continue;
     }
 
     if (node.type === 'approvers') {
-      const nextId = placeholders[i + 1];
-      const nextNode = workflow.nodes[nextId];
+      const nextNode = workflow.nodes[ids[i + 1]];
       const backup = (node.value as ApproversValue).backup
         ? formatOperand((node.value as ApproversValue).backup!)
         : undefined;
 
       if (nextNode?.type === 'status_condition') {
-        const backupNode = workflow.nodes[placeholders[i + 2]];
+        const bn = workflow.nodes[ids[i + 2]];
         steps.push({
           kind: 'condition_fork',
           actor: displayNodeValue(node.type, node.value),
           conditionTriggers: displayStatusConditionValue(nextNode.value as StatusConditionValue),
-          conditionBackupActor: backupNode ? displayNodeValue(backupNode.type, backupNode.value) : undefined,
+          conditionBackupActor: bn ? displayNodeValue(bn.type, bn.value) : undefined,
           backup,
         });
         i += 3; continue;
       }
       if (nextNode?.type === 'timeout') {
-        const escalationNode = workflow.nodes[placeholders[i + 2]];
+        const en = workflow.nodes[ids[i + 2]];
         steps.push({
           kind: 'fork',
           actor: displayNodeValue(node.type, node.value),
-          forkTimeout: formatTimeout(nextNode.value as TimeoutValue),
-          forkEscalationActor: escalationNode ? displayNodeValue(escalationNode.type, escalationNode.value) : undefined,
+          forkTimeout: fmt(nextNode.value as TimeoutValue),
+          forkEscalationActor: en ? displayNodeValue(en.type, en.value) : undefined,
           backup,
         });
         i += 3; continue;
@@ -81,181 +77,226 @@ function parseWorkflowSteps(workflow: Workflow): TimelineStep[] {
 
   if (!hasRequester) steps.unshift({ kind: 'start', description: 'Employee submits request' });
   const last = steps[steps.length - 1];
-  if (last && last.kind !== 'fork') steps.push({ kind: 'end', description: 'Request Approved' });
-
+  if (last && last.kind !== 'fork') steps.push({ kind: 'end', description: 'Request Approved.' });
   return steps;
 }
 
-// ─── Animated Timeline ────────────────────────────────────────────────────────
+// ─── Layout ───────────────────────────────────────────────────────────────────
 
-interface StepDelays {
-  node: number;
-  content: number;
-  branch: number;
-  line: number;
+const W = 560;       // inner canvas width
+const CX = W / 2;   // 280 — center x
+const LX = 108;     // left branch x
+const RX = W - LX;  // 452 — right branch x
+const NR = 20;      // node radius
+const ND = NR * 2;  // 40 — node diameter
+
+const G = {
+  LABEL_H: 52,    // main label box height
+  B_LABEL_H: 60,  // branch label box height
+  CONN: 30,       // connector between non-fork steps
+  PRE: 14,        // gap from main label to horizontal split
+  DROP: 70,       // from split y to branch node center
+  RET_DOWN: 44,   // from branch node bottom down to return turn
+  RET_CONT: 26,   // from return turn down to next node top
+  TOP: 28,
+  BOT: 44,
+};
+
+const MAIN_LW = 208;  // main label width
+const BR_LW = 152;    // branch label width
+
+interface SL {
+  step: TimelineStep;
+  nodeY: number;
+  labelY: number;
+  splitY?: number;
+  branchY?: number;
+  branchLabelY?: number;
+  retY?: number;
+  endY: number;
 }
 
-function computeDelays(steps: TimelineStep[]): StepDelays[] {
-  let d = 0.12;
-  return steps.map((step) => {
-    const node = d;
-    const content = d + 0.06;
-    d += 0.2;
-    const branch = d;
-    const branchCount =
-      step.kind === 'fork' || step.kind === 'condition_fork' ? 2
-      : step.kind === 'notify' ? 1
-      : 0;
-    d += branchCount * 0.14;
-    const line = d;
-    d += 0.28;
-    return { node, content, branch, line };
+function calcLayout(steps: TimelineStep[]): { items: SL[]; totalH: number } {
+  let y = G.TOP;
+  const items = steps.map((step): SL => {
+    const nodeY = y + NR;
+    const labelY = nodeY + NR + 7;
+    const isA = step.kind !== 'start' && step.kind !== 'end';
+
+    if (isA) {
+      const splitY = labelY + G.LABEL_H + G.PRE;
+      const branchY = splitY + G.DROP;
+      const branchLabelY = branchY + NR + 7;
+      const retY = branchLabelY + G.B_LABEL_H + G.RET_DOWN;
+      const endY = retY + G.RET_CONT;
+      y = endY;
+      return { step, nodeY, labelY, splitY, branchY, branchLabelY, retY, endY };
+    } else {
+      const endY = labelY + G.LABEL_H + G.CONN;
+      y = endY;
+      return { step, nodeY, labelY, endY };
+    }
   });
+  return { items, totalH: y + G.BOT };
 }
 
-const AnimatedTimeline: React.FC<{ steps: TimelineStep[] }> = ({ steps }) => {
-  const delays = computeDelays(steps);
-  const isApproverStep = (kind: StepKind) =>
-    kind === 'notify' || kind === 'fork' || kind === 'condition_fork';
+// ─── Flowchart Component ──────────────────────────────────────────────────────
+
+const DU = 0.12; // base delay unit
+
+const Flowchart: React.FC<{ steps: TimelineStep[] }> = ({ steps }) => {
+  const { items, totalH } = calcLayout(steps);
+
+  const pathEls: React.ReactElement[] = [];
+  const nodeEls: React.ReactElement[] = [];
+  let t = 0;
+  let pk = 0;
+  let nk = 0;
+
+  const addPath = (d: string, dur: number, at?: number) => {
+    const delay = at ?? t;
+    pathEls.push(
+      <motion.path
+        key={pk++}
+        d={d}
+        stroke="#94a3b8"
+        strokeWidth={1.5}
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ delay, duration: dur, ease: 'easeInOut' }}
+      />
+    );
+    if (at === undefined) t += dur + DU * 0.35;
+  };
+
+  const addNode = (
+    cx: number, cy: number,
+    bg: string, border: string,
+    Icon: React.ElementType,
+    iconCls: string,
+    iconProps?: Record<string, any>
+  ) => {
+    nodeEls.push(
+      <motion.div
+        key={nk++}
+        style={{ position: 'absolute', left: cx - NR, top: cy - NR, width: ND, height: ND }}
+        initial={{ scale: 0, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ delay: t, type: 'spring', stiffness: 380, damping: 24 }}
+        className={`rounded-full border-2 flex items-center justify-center ${bg} ${border}`}
+      >
+        <Icon size={16} className={iconCls} {...(iconProps ?? {})} />
+      </motion.div>
+    );
+  };
+
+  const addLabel = (
+    cx: number, topY: number, w: number,
+    main: string, sub?: string,
+    extraCls = ''
+  ) => {
+    nodeEls.push(
+      <motion.div
+        key={nk++}
+        style={{ position: 'absolute', left: cx - w / 2, top: topY, width: w, textAlign: 'center' }}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: t + 0.08, duration: 0.22 }}
+        className={`rounded-xl border px-3 py-2 bg-white border-slate-200 shadow-sm ${extraCls}`}
+      >
+        <p className="text-[12px] font-semibold text-slate-700 leading-snug">{main}</p>
+        {sub && <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">{sub}</p>}
+      </motion.div>
+    );
+  };
+
+  items.forEach((item, i) => {
+    const { step, nodeY, labelY, splitY, branchY, branchLabelY, retY } = item;
+    const isA = step.kind !== 'start' && step.kind !== 'end';
+    const next = items[i + 1];
+
+    // ── Main node ──
+    const isEnd = step.kind === 'end';
+    const isStart = step.kind === 'start';
+    const MIcon = isStart ? User : isEnd ? Star : Bell;
+    const mBg = isEnd ? 'bg-amber-50' : 'bg-white';
+    const mBrd = isEnd ? 'border-amber-300' : 'border-slate-300';
+    const mIcn = isEnd ? 'text-amber-500' : 'text-slate-500';
+    const mIconProps = isEnd ? { fill: 'currentColor', stroke: 'currentColor' } : {};
+
+    addNode(CX, nodeY, mBg, mBrd, MIcon, mIcn, mIconProps);
+
+    const mainText = isStart ? (step.actor ?? 'Employee')
+      : isEnd ? (step.description ?? 'Request Approved.')
+      : (step.actor ?? '');
+    const subText = isStart ? (step.description ?? 'Submits request')
+      : isEnd ? 'Email sent to employee.'
+      : 'Receives request in Inbox and Email';
+
+    addLabel(CX, labelY, MAIN_LW, mainText, subText);
+    t += DU * 1.3;
+
+    if (isA) {
+      // Line: main label bottom → split
+      addPath(`M ${CX},${nodeY + NR} L ${CX},${splitY}`, 0.17);
+
+      // Horizontal split line
+      addPath(`M ${LX},${splitY} L ${RX},${splitY}`, 0.22);
+
+      // Left + right drops (staggered slightly)
+      const tDrops = t;
+      addPath(`M ${LX},${splitY} L ${LX},${branchY! - NR}`, 0.22);
+      addPath(`M ${RX},${splitY} L ${RX},${branchY! - NR}`, 0.20, tDrops + 0.05);
+
+      // Left branch: approval
+      addNode(LX, branchY!, 'bg-emerald-50', 'border-emerald-300', ThumbsUp, 'text-emerald-600');
+      addLabel(LX, branchLabelY!, BR_LW, `${step.actor} Approves it.`);
+
+      // Right branch: rejection or escalation
+      t += DU * 0.7;
+      addNode(RX, branchY!, 'bg-red-50', 'border-red-200', ThumbsDown, 'text-red-400');
+
+      let rj: string, rjSub: string | undefined;
+      if (step.kind === 'fork') {
+        rj = `${step.actor} Rejects it.`;
+        rjSub = `After ${step.forkTimeout} → ${step.forkEscalationActor}`;
+      } else if (step.kind === 'condition_fork') {
+        rj = `${step.actor} Rejects it.`;
+        rjSub = `If ${step.conditionTriggers} → ${step.conditionBackupActor}`;
+      } else {
+        rj = `${step.actor} Rejects it.`;
+        rjSub = 'Email is sent to Employee.';
+      }
+      addLabel(RX, branchLabelY!, BR_LW, rj, rjSub);
+      t += DU * 1.4;
+
+      // Return: approval node bottom → turn → center
+      addPath(`M ${LX},${branchY! + NR} L ${LX},${retY} L ${CX},${retY}`, 0.30);
+
+      // Continue center line to next step
+      if (next) {
+        addPath(`M ${CX},${retY} L ${CX},${next.nodeY - NR}`, 0.18);
+      }
+    } else {
+      if (next) {
+        addPath(`M ${CX},${nodeY + NR} L ${CX},${next.nodeY - NR}`, 0.22);
+      }
+    }
+  });
 
   return (
-    <div className="px-6 py-6">
-      {steps.map((step, i) => {
-        const isLast = i === steps.length - 1;
-        const d = delays[i];
-
-        const dotBg =
-          step.kind === 'start' ? 'bg-indigo-100'
-          : step.kind === 'end' ? 'bg-emerald-100'
-          : 'bg-slate-100';
-        const dotText =
-          step.kind === 'start' ? 'text-indigo-600'
-          : step.kind === 'end' ? 'text-emerald-600'
-          : 'text-slate-500';
-        const DotIcon =
-          step.kind === 'start' ? User
-          : step.kind === 'end' ? CheckCircle2
-          : Bell;
-
-        return (
-          <div key={i} className="flex gap-4">
-            {/* Left column: dot + vertical connector */}
-            <div className="flex flex-col items-center" style={{ width: 32, minWidth: 32 }}>
-              <motion.div
-                initial={{ scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ delay: d.node, type: 'spring', stiffness: 380, damping: 22 }}
-                className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${dotBg} ${dotText}`}
-              >
-                <DotIcon size={14} />
-              </motion.div>
-
-              {!isLast && (
-                <motion.div
-                  initial={{ scaleY: 0 }}
-                  animate={{ scaleY: 1 }}
-                  transition={{ delay: d.line, duration: 0.32, ease: 'easeOut' }}
-                  style={{ transformOrigin: 'top' }}
-                  className="w-px bg-slate-200 flex-1 mt-1"
-                />
-              )}
-            </div>
-
-            {/* Right column: content + outcome branches */}
-            <div className={`flex-1 ${isLast ? 'pb-2' : 'pb-5'}`}>
-              {/* Node label */}
-              <motion.div
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: d.content, duration: 0.22 }}
-                className="pt-1"
-              >
-                {step.kind === 'start' && (
-                  <>
-                    <p className="text-sm font-semibold text-slate-800">
-                      {step.actor ?? 'Employee'}
-                    </p>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      {step.description ?? 'submits request'}
-                    </p>
-                  </>
-                )}
-
-                {isApproverStep(step.kind) && (
-                  <>
-                    <p className="text-sm font-semibold text-slate-800">{step.actor}</p>
-                    <p className="text-xs text-slate-400 mt-0.5">Reviews and approves</p>
-                    {step.backup && (
-                      <p className="text-xs text-slate-400 mt-0.5">↳ Backup: {step.backup}</p>
-                    )}
-                  </>
-                )}
-
-                {step.kind === 'end' && (
-                  <p className="text-sm font-semibold text-emerald-700">{step.description}</p>
-                )}
-              </motion.div>
-
-              {/* Outcome branches for approver steps */}
-              {isApproverStep(step.kind) && (
-                <div className="mt-3 space-y-2">
-                  {/* Rejection branch — always shown */}
-                  <motion.div
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: d.branch, duration: 0.2 }}
-                    className="flex items-center gap-2"
-                  >
-                    <div className="w-5 h-px bg-slate-200 shrink-0" />
-                    <div className="flex-1 px-3 py-2 bg-red-50 border border-red-100 rounded-xl">
-                      <p className="text-xs font-medium text-red-700 flex items-center gap-1.5">
-                        <X size={11} className="shrink-0" />
-                        Declined — employee notified
-                      </p>
-                    </div>
-                  </motion.div>
-
-                  {/* Timeout escalation branch */}
-                  {step.kind === 'fork' && (
-                    <motion.div
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: d.branch + 0.14, duration: 0.2 }}
-                      className="flex items-center gap-2"
-                    >
-                      <div className="w-5 h-px bg-slate-200 shrink-0" />
-                      <div className="flex-1 px-3 py-2 bg-amber-50 border border-amber-100 rounded-xl">
-                        <p className="text-xs text-amber-700 flex items-center gap-1.5">
-                          <Clock size={11} className="text-amber-500 shrink-0" />
-                          After {step.forkTimeout} → {step.forkEscalationActor}
-                        </p>
-                      </div>
-                    </motion.div>
-                  )}
-
-                  {/* Status-condition availability branch */}
-                  {step.kind === 'condition_fork' && (
-                    <motion.div
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: d.branch + 0.14, duration: 0.2 }}
-                      className="flex items-center gap-2"
-                    >
-                      <div className="w-5 h-px bg-slate-200 shrink-0" />
-                      <div className="flex-1 px-3 py-2 bg-amber-50 border border-amber-100 rounded-xl">
-                        <p className="text-xs text-amber-700 flex items-center gap-1.5">
-                          <UserX size={11} className="text-amber-500 shrink-0" />
-                          If {step.conditionTriggers} → {step.conditionBackupActor}
-                        </p>
-                      </div>
-                    </motion.div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })}
+    <div className="relative" style={{ width: W, height: totalH }}>
+      <svg
+        width={W}
+        height={totalH}
+        style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
+      >
+        {pathEls}
+      </svg>
+      {nodeEls}
     </div>
   );
 };
@@ -271,10 +312,10 @@ interface WorkflowPreviewProps {
 export const WorkflowPreview: React.FC<WorkflowPreviewProps> = ({ workflow, groupName, onClose }) => {
   const steps = parseWorkflowSteps(workflow);
 
-  const scopeNode = workflow.nodes.scope;
-  const timeOffNode = workflow.nodes.time_off_type;
-  const scopeLabel = scopeNode ? displayScopeValue(scopeNode.value as ScopeValue) : null;
-  const timeOffLabel = timeOffNode ? displayTimeOffTypeValue(timeOffNode.value as TimeOffTypeValue) : null;
+  const scopeLabel = workflow.nodes.scope
+    ? displayScopeValue(workflow.nodes.scope.value as ScopeValue) : null;
+  const timeOffLabel = workflow.nodes.time_off_type
+    ? displayTimeOffTypeValue(workflow.nodes.time_off_type.value as TimeOffTypeValue) : null;
   const contextLine = [scopeLabel, timeOffLabel].filter(Boolean).join(' · ');
 
   return (
@@ -282,9 +323,7 @@ export const WorkflowPreview: React.FC<WorkflowPreviewProps> = ({ workflow, grou
       {/* Header */}
       <div className="flex items-start justify-between px-5 pt-5 pb-0 shrink-0">
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-0.5">
-            Preview
-          </p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-0.5">Preview</p>
           <h2 className="text-sm font-bold text-slate-900">{groupName}</h2>
           {contextLine && (
             <p className="text-xs text-slate-400 mt-0.5 capitalize">{contextLine}</p>
@@ -300,9 +339,11 @@ export const WorkflowPreview: React.FC<WorkflowPreviewProps> = ({ workflow, grou
 
       <div className="border-b border-slate-100 mt-4 mx-5 shrink-0" />
 
-      {/* Animated timeline — re-mounts (replays animation) when workflow changes */}
+      {/* Flowchart — key on workflow ID so animation replays when switching workflows */}
       <div className="overflow-y-auto flex-1">
-        <AnimatedTimeline key={workflow.id + JSON.stringify(steps)} steps={steps} />
+        <div className="flex justify-center py-6 px-4">
+          <Flowchart key={workflow.id} steps={steps} />
+        </div>
       </div>
     </div>
   );

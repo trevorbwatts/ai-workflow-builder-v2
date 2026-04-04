@@ -532,7 +532,7 @@ export default function App() {
               <motion.div
                 key="preview-sidebar"
                 initial={{ width: 0, opacity: 0 }}
-                animate={{ width: 480, opacity: 1 }}
+                animate={{ width: 600, opacity: 1 }}
                 exit={{ width: 0, opacity: 0 }}
                 transition={{ type: 'spring', damping: 30, stiffness: 250 }}
                 className="border-l border-slate-200 bg-white overflow-hidden shrink-0"
