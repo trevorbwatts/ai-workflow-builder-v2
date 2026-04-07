@@ -1,14 +1,13 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import ReactDOM from 'react-dom';
 import { WorkflowGroup, Workflow, WorkflowNode } from './types';
 import { WorkflowCard } from './components/WorkflowCard';
 import { WorkflowPreview } from './components/WorkflowPreview';
 import { NewWorkflowInput } from './components/NewWorkflowInput';
+import { ConflictModal, CoverageGap } from './components/ConflictModal';
 import { motion, AnimatePresence } from 'motion/react';
-import { Home, User, Users, IdCard, PieChart, FileText, CircleDollarSign, Banknote, Zap, Menu, Plus, Loader2, AlertTriangle, CheckCircle2, X } from 'lucide-react';
+import { Home, User, Users, IdCard, PieChart, FileText, CircleDollarSign, Banknote, Zap, Menu, Plus, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { suggestScopeAdjustments } from './lib/gemini';
 import { ScopeValue, TimeOffTypeValue } from './types';
-import { displayScopeValue } from './lib/nodes';
 
 const NAV_ITEMS = [
   { icon: Home, label: 'Home' },
@@ -34,6 +33,7 @@ const WORKFLOW_GROUPS: WorkflowGroup[] = [
       id: 'information-updates-default',
       name: 'Information Updates',
       template: 'For {scope}, employee information updates are approved by {approvers}, then {secondary_approver}.',
+      status: 'published',
       nodes: {
         scope: scopeNode(),
         approvers: { id: 'approvers', type: 'approvers', label: 'Approvers', value: { operator: 'AND', operands: ['manager'] } },
@@ -48,6 +48,7 @@ const WORKFLOW_GROUPS: WorkflowGroup[] = [
       id: 'time-off-default',
       name: 'Time Off Requests',
       template: 'For {scope}, {time_off_type} are sent to {approvers} for approval. If not approved within {timeout}, they are forwarded to {escalation}.',
+      status: 'published',
       nodes: {
         scope: scopeNode(),
         time_off_type: { id: 'time_off_type', type: 'time_off_type', label: 'Time-Off Type', value: { attribute: 'all' } },
@@ -64,6 +65,7 @@ const WORKFLOW_GROUPS: WorkflowGroup[] = [
       id: 'timesheet-default',
       name: 'Timesheet',
       template: 'For {scope}, timesheets are submitted to {approvers} for approval. If not approved within {timeout}, they are escalated to {escalation}.',
+      status: 'published',
       nodes: {
         scope: scopeNode(),
         approvers: { id: 'approvers', type: 'approvers', label: 'Approvers', value: { operator: 'AND', operands: ['manager'] } },
@@ -79,6 +81,7 @@ const WORKFLOW_GROUPS: WorkflowGroup[] = [
       id: 'compensation-default',
       name: 'Compensation',
       template: 'For {scope}, compensation change requests can be made by {requester}, and are approved by {approvers}.',
+      status: 'published',
       nodes: {
         scope: scopeNode(),
         requester: { id: 'requester', type: 'approvers', label: 'Requester', value: { operator: 'AND', operands: ['manager'] } },
@@ -93,6 +96,7 @@ const WORKFLOW_GROUPS: WorkflowGroup[] = [
       id: 'employment-status-default',
       name: 'Employment Status',
       template: 'For {scope}, employment status change requests can be made by {requester}, and are approved by {approvers}.',
+      status: 'published',
       nodes: {
         scope: scopeNode(),
         requester: { id: 'requester', type: 'approvers', label: 'Requester', value: { operator: 'AND', operands: ['manager'] } },
@@ -107,6 +111,7 @@ const WORKFLOW_GROUPS: WorkflowGroup[] = [
       id: 'job-information-default',
       name: 'Job Information',
       template: 'For {scope}, job information change requests can be made by {requester}, and are approved by {approvers}.',
+      status: 'published',
       nodes: {
         scope: scopeNode(),
         requester: { id: 'requester', type: 'approvers', label: 'Requester', value: { operator: 'AND', operands: ['manager'] } },
@@ -121,6 +126,7 @@ const WORKFLOW_GROUPS: WorkflowGroup[] = [
       id: 'promotion-default',
       name: 'Promotion',
       template: 'For {scope}, promotion requests can be made by {requester}, and are approved by {approvers}.',
+      status: 'published',
       nodes: {
         scope: scopeNode(),
         requester: { id: 'requester', type: 'approvers', label: 'Requester', value: { operator: 'AND', operands: ['manager'] } },
@@ -137,47 +143,23 @@ interface ScopeSuggestion {
   suggestedValue: string;
 }
 
-interface PublishingState {
-  workflow: Workflow;
-  phase: 'loading' | 'conflicts';
-  suggestions: ScopeSuggestion[];
-}
+type ConflictStatus =
+  | { phase: 'idle' }
+  | { phase: 'checking' }
+  | { phase: 'clear' }
+  | { phase: 'conflicts'; suggestions: ScopeSuggestion[] };
 
 export default function App() {
   const [groups, setGroups] = useState<WorkflowGroup[]>(WORKFLOW_GROUPS);
   const [selectedGroupId, setSelectedGroupId] = useState(WORKFLOW_GROUPS[0].id);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
-  const [newestVariantId, setNewestVariantId] = useState<string | null>(null);
-  const [dismissedUncovered, setDismissedUncovered] = useState(false);
-  const [dismissedTimeOffUncovered, setDismissedTimeOffUncovered] = useState(false);
-  const [duplicateDraftIds, setDuplicateDraftIds] = useState<Set<string>>(new Set());
-  const [publishingState, setPublishingState] = useState<PublishingState | null>(null);
-  const publishResolveRef = useRef<((published: boolean) => void) | null>(null);
+  const [conflictStatus, setConflictStatus] = useState<ConflictStatus>({ phase: 'idle' });
+  const conflictCheckCounter = useRef(0);
+  const conflictDebounce = useRef<ReturnType<typeof setTimeout>>();
+  const [showConflictModal, setShowConflictModal] = useState(false);
   const [previewWorkflow, setPreviewWorkflow] = useState<Workflow | null>(null);
 
   const selectedGroup = groups.find((g) => g.id === selectedGroupId)!;
-
-  const showUncoveredBanner = useMemo(() => {
-    if (dismissedUncovered) return false;
-    const variants = selectedGroup.variants;
-    if (variants.length === 0) return false;
-    return !variants.some((v) => {
-      const attr = (v.nodes.scope?.value as ScopeValue)?.attribute;
-      return attr === 'all' || attr === 'all_other';
-    });
-  }, [selectedGroup.variants, dismissedUncovered]);
-
-  const showTimeOffCoverageBanner = useMemo(() => {
-    if (dismissedTimeOffUncovered) return false;
-    const variants = selectedGroup.variants;
-    if (variants.length === 0) return false;
-    const hasTimeOffTypeNode = variants.some((v) => v.nodes.time_off_type);
-    if (!hasTimeOffTypeNode) return false;
-    return !variants.some((v) => {
-      const attr = (v.nodes.time_off_type?.value as TimeOffTypeValue)?.attribute;
-      return attr === 'all' || attr === 'all_other';
-    });
-  }, [selectedGroup.variants, dismissedTimeOffUncovered]);
 
   const updateVariants = useCallback(
     (updater: (variants: Workflow[]) => Workflow[]) => {
@@ -188,56 +170,129 @@ export default function App() {
     [selectedGroupId]
   );
 
-  const doCommit = useCallback((workflow: Workflow) => {
-    setNewestVariantId((prev) => (prev === workflow.id ? null : prev));
-    setDuplicateDraftIds((prev) => { const next = new Set(prev); next.delete(workflow.id); return next; });
-    updateVariants((variants) => variants.map((v) => v.id === workflow.id ? workflow : v));
-    publishResolveRef.current?.(true);
-    publishResolveRef.current = null;
-    setPublishingState(null);
-  }, [updateVariants]);
+  // Project the "effective future published state": published variants (with pending drafts applied)
+  // plus saved variants. Drafts are excluded — they haven't been committed yet.
+  const getEffectiveVariants = useCallback((variants: Workflow[]): Workflow[] =>
+    variants
+      .filter((v) => v.status === 'published' || v.status === 'saved')
+      .map((v) => v.pendingDraft ? { ...v, ...v.pendingDraft } : v),
+    []
+  );
 
-  const handleApply = useCallback((updatedWorkflow: Workflow): Promise<boolean> => {
-    return new Promise((resolve) => {
-      publishResolveRef.current = resolve;
-      setPublishingState({ workflow: updatedWorkflow, phase: 'loading', suggestions: [] });
+  const effectiveVariants = useMemo(
+    () => getEffectiveVariants(selectedGroup.variants),
+    [selectedGroup.variants, getEffectiveVariants]
+  );
+
+  // Coverage gap check runs against the effective future state
+  const coverageGaps = useMemo((): CoverageGap[] => {
+    const gaps: CoverageGap[] = [];
+    if (effectiveVariants.length === 0) return gaps;
+
+    const hasScopeCatchAll = effectiveVariants.some((v) => {
+      const attr = (v.nodes.scope?.value as ScopeValue)?.attribute;
+      return attr === 'all' || attr === 'all_other';
     });
-  }, []);
+    if (!hasScopeCatchAll) {
+      gaps.push({ kind: 'scope', description: "Some employees aren't covered by any workflow variant. Add a catch-all to ensure everyone is included." });
+    }
 
-  // Run conflict check when publish modal opens
+    const hasTimeOffTypeNode = effectiveVariants.some((v) => v.nodes.time_off_type);
+    if (hasTimeOffTypeNode) {
+      const hasTimeOffCatchAll = effectiveVariants.some((v) => {
+        const attr = (v.nodes.time_off_type?.value as TimeOffTypeValue)?.attribute;
+        return attr === 'all' || attr === 'all_other';
+      });
+      if (!hasTimeOffCatchAll) {
+        gaps.push({ kind: 'time_off_type', description: "Some time-off types aren't covered by any workflow variant. Add a catch-all to ensure all request types are included." });
+      }
+    }
+
+    return gaps;
+  }, [effectiveVariants]);
+
+  // Auto-run conflict check (debounced) whenever the effective future state changes
   useEffect(() => {
-    if (!publishingState || publishingState.phase !== 'loading') return;
-    const { workflow } = publishingState;
-    const group = groups.find((g) => g.id === selectedGroupId)!;
-    const updatedVariants = group.variants.map((v) => v.id === workflow.id ? workflow : v);
+    clearTimeout(conflictDebounce.current);
 
-    if (updatedVariants.length <= 1) {
-      doCommit(workflow);
+    if (effectiveVariants.length <= 1) {
+      setConflictStatus({ phase: 'clear' });
       return;
     }
 
-    const scopeData = updatedVariants.map((v) => ({
-      id: v.id,
-      scope: (v.nodes.scope?.value as ScopeValue) ?? { attribute: 'all' as const, value: '' },
-      timeOffType: v.nodes.time_off_type?.value as TimeOffTypeValue | undefined,
-    }));
+    conflictDebounce.current = setTimeout(() => {
+      const myCheck = ++conflictCheckCounter.current;
+      setConflictStatus({ phase: 'checking' });
 
-    suggestScopeAdjustments(scopeData, group.name)
-      .then((suggestions) => {
-        if (suggestions.length > 0) {
-          setPublishingState((prev) => prev ? { ...prev, phase: 'conflicts', suggestions } : null);
-        } else {
-          doCommit(workflow);
-        }
-      })
-      .catch(() => doCommit(workflow));
+      const scopeData = effectiveVariants.map((v) => ({
+        id: v.id,
+        scope: (v.nodes.scope?.value as ScopeValue) ?? { attribute: 'all' as const, value: '' },
+        timeOffType: v.nodes.time_off_type?.value as TimeOffTypeValue | undefined,
+      }));
+
+      const groupName = groups.find((g) => g.id === selectedGroupId)!.name;
+      suggestScopeAdjustments(scopeData, groupName)
+        .then((suggestions) => {
+          if (myCheck !== conflictCheckCounter.current) return;
+          setConflictStatus(suggestions.length > 0
+            ? { phase: 'conflicts', suggestions }
+            : { phase: 'clear' }
+          );
+        })
+        .catch(() => {
+          if (myCheck !== conflictCheckCounter.current) return;
+          setConflictStatus({ phase: 'clear' });
+        });
+    }, 600);
+
+    return () => clearTimeout(conflictDebounce.current);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publishingState?.workflow?.id, publishingState?.phase]);
+  }, [effectiveVariants, selectedGroupId]);
+
+  const handleSave = useCallback((updatedWorkflow: Workflow) => {
+    const original = selectedGroup.variants.find((v) => v.id === updatedWorkflow.id);
+    if (original?.status === 'published') {
+      // Keep the published version live; store changes as a pending draft
+      updateVariants((variants) =>
+        variants.map((v) => v.id === updatedWorkflow.id
+          ? { ...v, pendingDraft: { template: updatedWorkflow.template, nodes: updatedWorkflow.nodes } }
+          : v
+        )
+      );
+    } else {
+      updateVariants((variants) =>
+        variants.map((v) =>
+          v.id === updatedWorkflow.id ? { ...updatedWorkflow, status: 'saved' as const, pendingDraft: undefined } : v
+        )
+      );
+    }
+  }, [updateVariants, selectedGroup.variants]);
+
+  const handlePublish = useCallback((variantId: string) => {
+    updateVariants((variants) =>
+      variants.map((v) => {
+        if (v.id !== variantId) return v;
+        const { pendingDraft, ...rest } = v;
+        return pendingDraft
+          ? { ...rest, ...pendingDraft, status: 'published' as const }
+          : { ...rest, status: 'published' as const };
+      })
+    );
+  }, [updateVariants]);
+
+  const handleDiscardDraft = useCallback((variantId: string) => {
+    updateVariants((variants) =>
+      variants.map((v) => {
+        if (v.id !== variantId) return v;
+        const { pendingDraft, ...rest } = v;
+        return rest;
+      })
+    );
+  }, [updateVariants]);
 
   const handleNewWorkflowCreated = useCallback((workflow: Workflow) => {
     const id = `${selectedGroupId}-${Date.now()}`;
-    const newVariant: Workflow = { ...workflow, id };
-    setNewestVariantId(id);
+    const newVariant: Workflow = { ...workflow, id, status: 'draft', pendingDraft: undefined };
     setIsCreatingNew(false);
     updateVariants((v) => [...v, newVariant]);
   }, [selectedGroupId, updateVariants]);
@@ -245,7 +300,6 @@ export default function App() {
   const handleDeleteVariant = useCallback(
     (variantId: string) => {
       updateVariants((v) => v.filter((w) => w.id !== variantId));
-      setDuplicateDraftIds((prev) => { const next = new Set(prev); next.delete(variantId); return next; });
     },
     [updateVariants]
   );
@@ -253,9 +307,7 @@ export default function App() {
   const handleDuplicateVariant = useCallback((variantId: string) => {
     const source = selectedGroup.variants.find((v) => v.id === variantId)!;
     const id = `${selectedGroupId}-${Date.now()}`;
-    const duplicate: Workflow = { ...source, id };
-    setDuplicateDraftIds((prev) => new Set([...prev, id]));
-    setNewestVariantId(id);
+    const duplicate: Workflow = { ...source, id, status: 'draft', pendingDraft: undefined };
     updateVariants((v) => [...v, duplicate]);
   }, [selectedGroup.variants, selectedGroupId, updateVariants]);
 
@@ -265,6 +317,7 @@ export default function App() {
     const catchAllVariant: Workflow = {
       ...base,
       id,
+      status: 'draft',
       nodes: {
         ...base.nodes,
         scope: {
@@ -273,7 +326,6 @@ export default function App() {
         },
       },
     };
-    setNewestVariantId(id);
     updateVariants((v) => [...v, catchAllVariant]);
   }, [selectedGroup.variants, selectedGroupId, updateVariants]);
 
@@ -283,6 +335,7 @@ export default function App() {
     const catchAllVariant: Workflow = {
       ...base,
       id,
+      status: 'draft',
       nodes: {
         ...base.nodes,
         time_off_type: {
@@ -291,7 +344,6 @@ export default function App() {
         },
       },
     };
-    setNewestVariantId(id);
     updateVariants((v) => [...v, catchAllVariant]);
   }, [selectedGroup.variants, selectedGroupId, updateVariants]);
 
@@ -316,23 +368,27 @@ export default function App() {
     [updateVariants]
   );
 
-  const handlePublishModalCancel = useCallback(() => {
-    publishResolveRef.current?.(false);
-    publishResolveRef.current = null;
-    setPublishingState(null);
-  }, []);
+  const handleAcceptAllSuggestions = useCallback(() => {
+    if (conflictStatus.phase === 'conflicts') {
+      conflictStatus.suggestions.forEach(handleAcceptSuggestion);
+      setConflictStatus({ phase: 'clear' });
+      setShowConflictModal(false);
+    }
+  }, [conflictStatus, handleAcceptSuggestion]);
 
-  const handleFixAndPublish = useCallback(() => {
-    if (!publishingState) return;
-    // Apply all suggestions then commit
-    publishingState.suggestions.forEach(handleAcceptSuggestion);
-    doCommit(publishingState.workflow);
-  }, [publishingState, handleAcceptSuggestion, doCommit]);
-
-  const handlePublishAnyway = useCallback(() => {
-    if (!publishingState) return;
-    doCommit(publishingState.workflow);
-  }, [publishingState, doCommit]);
+  const handleAcceptOneSuggestion = useCallback((suggestion: ScopeSuggestion) => {
+    handleAcceptSuggestion(suggestion);
+    // After applying one fix, update conflict status to remove it
+    setConflictStatus((prev) => {
+      if (prev.phase !== 'conflicts') return prev;
+      const remaining = prev.suggestions.filter((s) => s.variantId !== suggestion.variantId);
+      if (remaining.length === 0) {
+        setShowConflictModal(false);
+        return { phase: 'clear' };
+      }
+      return { phase: 'conflicts', suggestions: remaining };
+    });
+  }, [handleAcceptSuggestion]);
 
   return (
     <div className="h-screen flex bg-[#F9FAFB] overflow-hidden">
@@ -374,12 +430,12 @@ export default function App() {
         <main className="flex-1 flex overflow-hidden min-h-0">
           {/* Sidebar */}
           <div className="w-56 border-r border-slate-200 bg-white hidden lg:flex flex-col p-4">
-            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Your Workflows</h3>
+            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Approval Workflows</h3>
             <div className="space-y-0.5">
               {groups.map((g) => (
                 <button
                   key={g.id}
-                  onClick={() => { setSelectedGroupId(g.id); setDismissedUncovered(false); setDismissedTimeOffUncovered(false); setPreviewWorkflow(null); }}
+                  onClick={() => { setSelectedGroupId(g.id); setPreviewWorkflow(null); setConflictStatus({ phase: 'idle' }); }}
                   className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                     g.id === selectedGroupId ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'
                   }`}
@@ -398,69 +454,48 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               className="w-full max-w-4xl space-y-4"
             >
-              <h2 className="text-2xl font-bold text-slate-900 mb-4">{selectedGroup.name}</h2>
+              {(() => {
+                const scopeConflicts = conflictStatus.phase === 'conflicts' ? conflictStatus.suggestions.length : 0;
+                const totalIssues = coverageGaps.length + scopeConflicts;
+                const hasIssues = totalIssues > 0;
+                const isAllClear = !hasIssues && (conflictStatus.phase === 'clear');
 
-              {/* Coverage gap banner */}
-              <AnimatePresence>
-                {showUncoveredBanner && (
-                  <motion.div
-                    key="uncovered-banner"
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center justify-between gap-4 text-sm"
-                  >
-                    <span className="text-red-800">
-                      <span className="font-semibold">Coverage gap:</span> Some employees aren't covered by any workflow variant. Add a catch-all to ensure everyone is included.
-                    </span>
-                    <div className="flex gap-2 shrink-0">
-                      <button
-                        onClick={handleAddCatchAll}
-                        className="px-3 py-1 bg-red-600 text-white rounded-lg text-xs font-semibold hover:bg-red-700 transition-colors"
-                      >
-                        Add catch-all
-                      </button>
-                      <button
-                        onClick={() => setDismissedUncovered(true)}
-                        className="px-3 py-1 text-red-700 border border-red-300 rounded-lg text-xs font-semibold hover:bg-red-100 transition-colors"
-                      >
-                        Dismiss
-                      </button>
+                return (
+                  <div className="flex items-center justify-between mb-4 max-w-3xl w-full">
+                    <h2 className="text-2xl font-bold text-slate-900">{selectedGroup.name}</h2>
+                    <div className="flex items-center gap-2.5 text-xs">
+                      <span className="text-slate-400 font-semibold uppercase tracking-wider">Pre-Flight Check</span>
+                      {conflictStatus.phase === 'checking' && (
+                        <span className="flex items-center gap-1.5 text-slate-500">
+                          <Loader2 size={12} className="animate-spin" /> Checking...
+                        </span>
+                      )}
+                      {conflictStatus.phase !== 'checking' && isAllClear && (
+                        <span className="flex items-center gap-1.5 text-emerald-600">
+                          <CheckCircle2 size={12} /> Everything looks good
+                        </span>
+                      )}
+                      {conflictStatus.phase !== 'checking' && !isAllClear && !hasIssues && (
+                        <span className="text-slate-400">Ready</span>
+                      )}
+                      {conflictStatus.phase !== 'checking' && hasIssues && (
+                        <span className="flex items-center gap-2 text-amber-600">
+                          <span className="flex items-center gap-1.5">
+                            <AlertTriangle size={12} />
+                            {totalIssues} {totalIssues === 1 ? 'Issue' : 'Issues'} Found
+                          </span>
+                          <button
+                            onClick={() => setShowConflictModal(true)}
+                            className="px-2.5 py-1 bg-amber-100 text-amber-700 rounded-lg font-semibold hover:bg-amber-200 transition-colors"
+                          >
+                            View &amp; Resolve
+                          </button>
+                        </span>
+                      )}
                     </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Time-off type coverage gap banner */}
-              <AnimatePresence>
-                {showTimeOffCoverageBanner && (
-                  <motion.div
-                    key="time-off-uncovered-banner"
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center justify-between gap-4 text-sm"
-                  >
-                    <span className="text-red-800">
-                      <span className="font-semibold">Coverage gap:</span> Some time-off types aren't covered by any workflow variant. Add a catch-all to ensure all request types are included.
-                    </span>
-                    <div className="flex gap-2 shrink-0">
-                      <button
-                        onClick={handleAddTimeOffCatchAll}
-                        className="px-3 py-1 bg-red-600 text-white rounded-lg text-xs font-semibold hover:bg-red-700 transition-colors"
-                      >
-                        Add catch-all
-                      </button>
-                      <button
-                        onClick={() => setDismissedTimeOffUncovered(true)}
-                        className="px-3 py-1 text-red-700 border border-red-300 rounded-lg text-xs font-semibold hover:bg-red-100 transition-colors"
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                  </div>
+                );
+              })()}
 
               <AnimatePresence>
                 {[...selectedGroup.variants].sort((a, b) => {
@@ -475,22 +510,22 @@ export default function App() {
                   <motion.div
                     key={variant.id}
                     layout
-                    initial={variant.id === newestVariantId ? { opacity: 0, y: -16 } : false}
+                    initial={variant.status === 'draft' ? { opacity: 0, y: -16 } : false}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ type: 'spring', damping: 28, stiffness: 220 }}
                   >
                     <WorkflowCard
                       liveWorkflow={variant}
                       onUpdateLiveNode={() => {}}
-                      onApply={handleApply}
+                      onSave={handleSave}
+                      onPublish={handlePublish}
+                      onDiscardDraft={handleDiscardDraft}
                       onDelete={selectedGroup.variants.length > 1 ? () => handleDeleteVariant(variant.id) : undefined}
                       onDuplicate={() => handleDuplicateVariant(variant.id)}
                       onPreview={setPreviewWorkflow}
                       groupName={selectedGroup.name}
-                      initiallyEditing={variant.id === newestVariantId}
-                      isDraft={variant.id === newestVariantId}
-                      isDuplicateDraft={duplicateDraftIds.has(variant.id)}
-                      hasConflict={false}
+                      initiallyEditing={variant.status === 'draft'}
+                      hasConflicts={conflictStatus.phase === 'conflicts'}
                       hasMultipleVariants={selectedGroup.variants.length > 1}
                     />
                   </motion.div>
@@ -548,74 +583,19 @@ export default function App() {
         </main>
       </div>
 
-      {/* Publishing Modal */}
-      {publishingState && ReactDOM.createPortal(
-        <div className="fixed inset-0 bg-black/40 z-[9500] flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, y: 12, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ duration: 0.15 }}
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden"
-          >
-            {publishingState.phase === 'loading' && (
-              <div className="flex flex-col items-center justify-center px-8 py-10 text-center">
-                <div className="w-12 h-12 rounded-full bg-indigo-50 flex items-center justify-center mb-4">
-                  <Loader2 size={22} className="text-indigo-500 animate-spin" />
-                </div>
-                <p className="text-sm font-semibold text-slate-800">Setting up your workflow</p>
-                <p className="text-xs text-slate-400 mt-1">Checking for conflicts...</p>
-              </div>
-            )}
-
-            {publishingState.phase === 'conflicts' && (
-              <>
-                <div className="flex items-start justify-between px-5 pt-5 pb-4">
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
-                      <AlertTriangle size={15} className="text-amber-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">Scope conflict detected</p>
-                      <p className="text-xs text-slate-500 mt-0.5">Publishing this will create overlapping rules.</p>
-                    </div>
-                  </div>
-                  <button onClick={handlePublishModalCancel} className="p-1 hover:bg-slate-100 rounded-full text-slate-400 transition-colors shrink-0">
-                    <X size={14} />
-                  </button>
-                </div>
-
-                <div className="px-5 pb-4 space-y-2">
-                  {publishingState.suggestions.map((s) => {
-                    const group = groups.find((g) => g.id === selectedGroupId)!;
-                    const variant = group.variants.find((v) => v.id === s.variantId) ?? publishingState.workflow;
-                    return (
-                      <div key={s.variantId} className="px-3 py-3 bg-amber-50 border border-amber-100 rounded-xl text-xs text-amber-800">
-                        Change <span className="font-semibold">"{displayScopeValue(variant.nodes.scope?.value as ScopeValue)}"</span>{' '}
-                        to <span className="font-semibold">"{s.suggestedDisplay}"</span> to avoid overlap.
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div className="px-5 pb-5 flex gap-2">
-                  <button
-                    onClick={handleFixAndPublish}
-                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold hover:bg-indigo-700 transition-colors"
-                  >
-                    <CheckCircle2 size={13} /> Fix &amp; Publish
-                  </button>
-                  <button
-                    onClick={handlePublishAnyway}
-                    className="flex-1 px-3 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-50 transition-colors"
-                  >
-                    Publish Anyway
-                  </button>
-                </div>
-              </>
-            )}
-          </motion.div>
-        </div>,
-        document.body
+      {showConflictModal && (
+        <ConflictModal
+          suggestions={conflictStatus.phase === 'conflicts' ? conflictStatus.suggestions : []}
+          coverageGaps={coverageGaps}
+          variants={selectedGroup.variants}
+          onAcceptSuggestion={handleAcceptOneSuggestion}
+          onFixCoverageGap={(kind) => {
+            if (kind === 'scope') handleAddCatchAll();
+            else handleAddTimeOffCatchAll();
+          }}
+          onAcceptAll={handleAcceptAllSuggestions}
+          onClose={() => setShowConflictModal(false)}
+        />
       )}
     </div>
   );

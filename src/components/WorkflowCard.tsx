@@ -4,43 +4,49 @@ import { Workflow, Message } from '../types';
 import { WorkflowSentence } from './WorkflowSentence';
 import { processWorkflowEdit } from '../lib/gemini';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Pencil, Send, Check, X, Loader2, Bot, User, Trash2, MoreHorizontal, Copy } from 'lucide-react';
+import { Sparkles, Pencil, Send, Check, X, Loader2, Bot, User, Trash2, MoreHorizontal, Copy, Upload } from 'lucide-react';
 
 interface WorkflowCardProps {
   liveWorkflow: Workflow;
   onUpdateLiveNode: (nodeId: string, newValue: any) => void;
-  onApply: (workflow: Workflow) => Promise<boolean>;
+  onSave: (workflow: Workflow) => void;
+  onPublish: (variantId: string) => void;
+  onDiscardDraft: (variantId: string) => void;
   onDelete?: () => void;
   onDuplicate?: () => void;
   onPreview?: (workflow: Workflow) => void;
   groupName: string;
   initiallyEditing?: boolean;
-  isDraft?: boolean;
-  isDuplicateDraft?: boolean;
-  hasConflict?: boolean;
+  hasConflicts?: boolean;
   hasMultipleVariants?: boolean;
 }
 
 export const WorkflowCard: React.FC<WorkflowCardProps> = ({
   liveWorkflow,
   onUpdateLiveNode,
-  onApply,
+  onSave,
+  onPublish,
+  onDiscardDraft,
   onDelete,
   onDuplicate,
   onPreview,
   groupName,
   initiallyEditing = false,
-  isDraft = false,
-  isDuplicateDraft = false,
-  hasConflict = false,
+  hasConflicts = false,
   hasMultipleVariants = false,
 }) => {
+  const isDraft = liveWorkflow.status === 'draft';
+  const pendingWorkflow: Workflow | null = liveWorkflow.pendingDraft
+    ? { ...liveWorkflow, ...liveWorkflow.pendingDraft }
+    : null;
   const [isEditing, setIsEditing] = useState(initiallyEditing);
-  const [draft, setDraft] = useState<Workflow>(liveWorkflow);
+  // When editing a published workflow that has a pending draft, start from the pending draft
+  const [draft, setDraft] = useState<Workflow>(() =>
+    pendingWorkflow ?? liveWorkflow
+  );
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isPublishing, setIsPublishing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -52,7 +58,7 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
-  // Auto-open preview showing draft when editing or in draft mode
+  // Auto-open preview whenever draft changes while editing/in draft mode
   useEffect(() => {
     if (isEditing || isDraft) {
       onPreview?.(draft);
@@ -70,10 +76,12 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
   }, []);
 
   const handleOpenEdit = () => {
-    setDraft(JSON.parse(JSON.stringify(liveWorkflow)));
+    const base = pendingWorkflow ?? liveWorkflow;
+    setDraft(JSON.parse(JSON.stringify(base)));
     setMessages([]);
     setInput('');
     setIsEditing(true);
+    onPreview?.(base);
     setTimeout(() => inputRef.current?.focus(), 300);
   };
 
@@ -97,18 +105,11 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
     onPreview?.(liveWorkflow);
   };
 
-  const handleApply = async () => {
-    setIsPublishing(true);
-    try {
-      const published = await onApply(draft);
-      if (published) {
-        setIsEditing(false);
-        setMessages([]);
-        setInput('');
-      }
-    } finally {
-      setIsPublishing(false);
-    }
+  const handleSave = () => {
+    onSave(draft);
+    setIsEditing(false);
+    setMessages([]);
+    setInput('');
   };
 
   const handleUpdateDraftNode = (nodeId: string, newValue: any) => {
@@ -148,25 +149,42 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
     }
   };
 
-  const hasDraftChanges = JSON.stringify(draft) !== JSON.stringify(liveWorkflow);
-  const publishDisabled = isDuplicateDraft ? !hasDraftChanges : (!isDraft && !hasDraftChanges);
+  const compareBase = pendingWorkflow ?? liveWorkflow;
+  const hasDraftChanges = JSON.stringify(draft) !== JSON.stringify(compareBase);
+  const saveDisabled = !isDraft && !hasDraftChanges;
 
   return (
-    <div className={`glass-panel rounded-2xl overflow-hidden max-w-3xl w-full transition-all duration-300 ${hasConflict ? 'ring-2 ring-amber-400' : ''}`}>
+    <div className={`glass-panel rounded-2xl overflow-hidden max-w-3xl w-full transition-all duration-300`}>
       {/* ── Live Section ─────────────────────────────────────── */}
       {!isDraft && <div className="p-8 cursor-pointer hover:bg-slate-50/60 transition-colors" onClick={() => onPreview?.(liveWorkflow)}>
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2">
             <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400">
-              Active Workflow
+              {liveWorkflow.status === 'published' ? 'Active Workflow' : 'Saved Workflow'}
             </h2>
-            {isEditing && (
+            {liveWorkflow.status === 'published' && (
               <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full uppercase tracking-wider">
                 Live
               </span>
             )}
+            {liveWorkflow.status === 'saved' && (
+              <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                Unpublished
+              </span>
+            )}
           </div>
           {!isEditing && (
+            <div className="flex items-center gap-2">
+              {liveWorkflow.status !== 'published' && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onPublish(liveWorkflow.id); }}
+                  disabled={hasConflicts}
+                  title={hasConflicts ? 'Resolve conflicts before publishing' : 'Publish workflow'}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Upload size={12} /> Publish
+                </button>
+              )}
             <div ref={menuRef} className="relative">
               <button
                 onClick={(e) => {
@@ -223,6 +241,7 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
                   document.body
                 )}
             </div>
+            </div>
           )}
         </div>
 
@@ -233,6 +252,63 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
         />
       </div>}
 
+
+      {/* ── Pending Draft Section ────────────────────────────── */}
+      <AnimatePresence>
+        {liveWorkflow.status === 'published' && pendingWorkflow && !isEditing && (
+          <motion.div
+            key="pending-draft"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 220 }}
+            className="overflow-hidden"
+          >
+            <div className="border-t border-slate-200 bg-slate-50/40">
+              <div className="px-8 pt-6 pb-5">
+                <div className="flex items-center justify-between mb-5">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400">Saved Workflow</h2>
+                    <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full uppercase tracking-wider">Unpublished</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => { handleOpenEdit(); }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 border border-slate-200 bg-white rounded-lg text-xs font-semibold hover:bg-slate-50 transition-colors"
+                    >
+                      <Pencil size={11} /> Edit
+                    </button>
+                    <button
+                      onClick={() => onDiscardDraft(liveWorkflow.id)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 border border-slate-200 bg-white rounded-lg text-xs font-semibold hover:bg-slate-50 transition-colors"
+                    >
+                      <X size={11} /> Discard
+                    </button>
+                    <button
+                      onClick={() => onPublish(liveWorkflow.id)}
+                      disabled={hasConflicts}
+                      title={hasConflicts ? 'Resolve conflicts before publishing' : 'Publish this workflow'}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <Upload size={11} /> Publish
+                    </button>
+                  </div>
+                </div>
+                <div
+                  className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm cursor-pointer hover:border-indigo-200 transition-colors"
+                  onClick={() => onPreview?.(pendingWorkflow)}
+                >
+                  <WorkflowSentence
+                    workflow={pendingWorkflow}
+                    readOnly
+                    hasMultipleVariants={hasMultipleVariants}
+                  />
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── Draft + AI Section (expandable) ──────────────────── */}
       <AnimatePresence>
@@ -253,9 +329,7 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
                     Draft
                   </span>
                   <span className="text-xs text-slate-400">
-                    {isDuplicateDraft
-                      ? 'Make at least one change before publishing'
-                      : 'Changes preview here before going live'}
+                    Changes preview here before saving
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -266,19 +340,22 @@ export const WorkflowCard: React.FC<WorkflowCardProps> = ({
                     <X size={12} /> {isDraft ? 'Cancel' : 'Discard'}
                   </button>
                   <button
-                    onClick={handleApply}
-                    disabled={publishDisabled || isPublishing}
+                    onClick={handleSave}
+                    disabled={saveDisabled}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
                   >
-                    {isPublishing ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-                    {isDraft ? 'Publish' : 'Apply Changes'}
+                    <Check size={12} />
+                    Save
                   </button>
                 </div>
               </div>
 
-              {/* Draft workflow sentence */}
+              {/* Draft workflow sentence — clicking restores preview */}
               <div className="px-8 pb-5">
-                <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+                <div
+                  className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm cursor-pointer hover:border-indigo-200 transition-colors"
+                  onClick={() => onPreview?.(draft)}
+                >
                   <WorkflowSentence
                     workflow={draft}
                     onUpdateNode={handleUpdateDraftNode}

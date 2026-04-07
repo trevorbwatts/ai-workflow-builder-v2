@@ -52,11 +52,20 @@ export interface WorkflowNode {
   value: NodeValue;
 }
 
+export type WorkflowStatus = 'draft' | 'saved' | 'published';
+
+export interface PendingDraft {
+  template: string;
+  nodes: Record<string, WorkflowNode>;
+}
+
 export interface Workflow {
   id: string;
   name: string;
   template: string;
   nodes: Record<string, WorkflowNode>;
+  status: WorkflowStatus;
+  pendingDraft?: PendingDraft;
 }
 
 export interface WorkflowGroup {

@@ -113,7 +113,7 @@ const G = {
   DROP: 58,       // from split y to branch node center
   RET_DOWN: 36,   // from branch node bottom down to return turn
   RET_CONT: 18,   // from return turn down to next node top
-  TOP: 20,
+  TOP: 10,
   BOT: 32,
 };
 
@@ -424,21 +424,39 @@ interface PannableCanvasProps {
 }
 
 const PannableCanvas: React.FC<PannableCanvasProps> = ({ workflowId, children }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const dragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
 
+  const hasDragged = useRef(false);
+
   // Reset pan when workflow changes
   const prevId = useRef(workflowId);
   if (prevId.current !== workflowId) {
     prevId.current = workflowId;
-    offset.x = 0;
-    offset.y = 0;
+    hasDragged.current = false;
   }
+
+  // Keep re-centering as the panel slides open, until the user drags
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      if (w > 0 && !hasDragged.current) {
+        const px = 16;
+        setOffset({ x: (w / 2) - CX - px, y: 0 });
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [workflowId]);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     dragging.current = true;
+    hasDragged.current = true;
     setIsDragging(true);
     lastPos.current = { x: e.clientX, y: e.clientY };
   }, []);
@@ -458,6 +476,7 @@ const PannableCanvas: React.FC<PannableCanvasProps> = ({ workflowId, children })
 
   return (
     <div
+      ref={containerRef}
       className="flex-1 overflow-hidden relative select-none"
       style={{
         backgroundImage: 'radial-gradient(circle, #cbd5e1 1px, transparent 1px)',
@@ -471,7 +490,7 @@ const PannableCanvas: React.FC<PannableCanvasProps> = ({ workflowId, children })
     >
       <div
         style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
-        className="flex justify-center py-6 px-4"
+        className="py-6 px-4"
       >
         {children}
       </div>
