@@ -20,9 +20,11 @@ interface CustomSelectProps {
   className?: string;
 }
 
+interface DropdownRect { top: number; bottom: number; left: number; width: number; }
+
 const CustomSelect: React.FC<CustomSelectProps> = ({ value, onChange, options, className = '' }) => {
   const [open, setOpen] = useState(false);
-  const [dropUp, setDropUp] = useState(false);
+  const [buttonRect, setButtonRect] = useState<DropdownRect | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const selected = options.find((o) => o.value === value);
@@ -37,12 +39,51 @@ const CustomSelect: React.FC<CustomSelectProps> = ({ value, onChange, options, c
 
   const handleToggle = () => {
     if (!open && buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      const estimatedHeight = options.length * 36 + 8;
-      setDropUp(rect.bottom + estimatedHeight > window.innerHeight - 16);
+      const r = buttonRef.current.getBoundingClientRect();
+      setButtonRect({ top: r.top, bottom: r.bottom, left: r.left, width: r.width });
     }
     setOpen((o) => !o);
   };
+
+  const estimatedHeight = options.length * 36 + 8;
+  const dropUp = buttonRect ? buttonRect.bottom + estimatedHeight > window.innerHeight - 16 : false;
+
+  const dropdown = buttonRect && (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0, y: dropUp ? 4 : -4, scale: 0.97 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: dropUp ? 4 : -4, scale: 0.97 }}
+          transition={{ duration: 0.1 }}
+          style={{
+            position: 'fixed',
+            left: buttonRect.left,
+            width: buttonRect.width,
+            ...(dropUp ? { bottom: window.innerHeight - buttonRect.top + 6 } : { top: buttonRect.bottom + 6 }),
+            zIndex: 10000,
+          }}
+          className="bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden"
+        >
+          {options.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => { onChange(opt.value); setOpen(false); }}
+              className={`w-full flex items-center justify-between px-3 py-2 text-sm text-left transition-colors ${
+                opt.value === value
+                  ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                  : 'text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              {opt.label}
+              {opt.value === value && <Check size={13} className="text-indigo-500 shrink-0" />}
+            </button>
+          ))}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
 
   return (
     <div ref={ref} className={`relative ${className}`}>
@@ -56,35 +97,7 @@ const CustomSelect: React.FC<CustomSelectProps> = ({ value, onChange, options, c
         <ChevronDown size={13} className={`text-slate-400 shrink-0 transition-transform duration-150 ${open ? 'rotate-180' : ''}`} />
       </button>
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: dropUp ? 4 : -4, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: dropUp ? 4 : -4, scale: 0.97 }}
-            transition={{ duration: 0.1 }}
-            className={`absolute z-50 w-full bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden ${
-              dropUp ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
-            }`}
-          >
-            {options.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => { onChange(opt.value); setOpen(false); }}
-                className={`w-full flex items-center justify-between px-3 py-2 text-sm text-left transition-colors ${
-                  opt.value === value
-                    ? 'bg-indigo-50 text-indigo-700 font-semibold'
-                    : 'text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                {opt.label}
-                {opt.value === value && <Check size={13} className="text-indigo-500 shrink-0" />}
-              </button>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {ReactDOM.createPortal(dropdown, document.body)}
     </div>
   );
 };
@@ -104,17 +117,33 @@ export const NodeEditor: React.FC<NodeEditorProps> = ({ node, onClose, onSave, a
 
   const handleSave = () => onSave(value);
 
+  const margin = 12;
+  const spaceBelow = window.innerHeight - anchorRect.bottom - margin;
+  const spaceAbove = anchorRect.top - margin;
+  const panelUp = spaceBelow < 200 && spaceAbove > spaceBelow;
+  const maxH = Math.max(panelUp ? spaceAbove : spaceBelow, 120);
+  const leftPos = Math.min(anchorRect.left, window.innerWidth - 288 - margin);
+
   const panel = (
     <motion.div
-      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+      initial={{ opacity: 0, y: panelUp ? -10 : 10, scale: 0.95 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 10, scale: 0.95 }}
+      exit={{ opacity: 0, y: panelUp ? -10 : 10, scale: 0.95 }}
       transition={{ duration: 0.15 }}
-      style={{ position: 'fixed', top: anchorRect.bottom + 8, left: anchorRect.left, zIndex: 9999 }}
-      className="w-72 bg-white border border-slate-200 shadow-xl rounded-2xl p-4"
+      style={{
+        position: 'fixed',
+        ...(panelUp
+          ? { bottom: window.innerHeight - anchorRect.top + 8 }
+          : { top: anchorRect.bottom + 8 }),
+        left: leftPos,
+        zIndex: 9999,
+        maxHeight: maxH,
+      }}
+      className="w-72 bg-white border border-slate-200 shadow-xl rounded-2xl flex flex-col overflow-hidden"
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="flex items-center justify-between mb-4">
+      {/* Sticky header */}
+      <div className="flex items-center justify-between px-4 pt-4 pb-3 shrink-0">
         <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
           Edit {node.label}
         </span>
@@ -126,34 +155,40 @@ export const NodeEditor: React.FC<NodeEditorProps> = ({ node, onClose, onSave, a
         </button>
       </div>
 
-      {node.type === 'scope' && (
-        <ScopeEditor value={value as ScopeValue} onChange={setValue} hasMultipleVariants={hasMultipleVariants} />
-      )}
-      {node.type === 'time_off_type' && (
-        <TimeOffTypeEditor value={value as TimeOffTypeValue} onChange={setValue} hasMultipleVariants={hasMultipleVariants} />
-      )}
-      {node.type === 'approvers' && (
-        <ApproversEditor value={value as ApproversValue} onChange={setValue} />
-      )}
-      {node.type === 'timeout' && (
-        <TimeoutEditor value={value as TimeoutValue} onChange={setValue} />
-      )}
-      {node.type === 'advance_notice' && (
-        <AdvanceNoticeEditor value={value as AdvanceNoticeValue} onChange={setValue} />
-      )}
-      {node.type === 'status_condition' && (
-        <StatusConditionEditor value={value as StatusConditionValue} onChange={setValue} />
-      )}
-      {node.type === 'notify' && (
-        <NotifyEditor value={value as NotifyValue} onChange={setValue} />
-      )}
+      {/* Scrollable body */}
+      <div className="overflow-y-auto px-4 flex-1 min-h-0">
+        {node.type === 'scope' && (
+          <ScopeEditor value={value as ScopeValue} onChange={setValue} hasMultipleVariants={hasMultipleVariants} />
+        )}
+        {node.type === 'time_off_type' && (
+          <TimeOffTypeEditor value={value as TimeOffTypeValue} onChange={setValue} hasMultipleVariants={hasMultipleVariants} />
+        )}
+        {node.type === 'approvers' && (
+          <ApproversEditor value={value as ApproversValue} onChange={setValue} />
+        )}
+        {node.type === 'timeout' && (
+          <TimeoutEditor value={value as TimeoutValue} onChange={setValue} />
+        )}
+        {node.type === 'advance_notice' && (
+          <AdvanceNoticeEditor value={value as AdvanceNoticeValue} onChange={setValue} />
+        )}
+        {node.type === 'status_condition' && (
+          <StatusConditionEditor value={value as StatusConditionValue} onChange={setValue} />
+        )}
+        {node.type === 'notify' && (
+          <NotifyEditor value={value as NotifyValue} onChange={setValue} />
+        )}
+      </div>
 
-      <button
-        onClick={handleSave}
-        className="mt-4 w-full bg-indigo-600 text-white text-xs font-bold py-2.5 rounded-xl hover:bg-indigo-700 transition-colors"
-      >
-        Apply Changes
-      </button>
+      {/* Sticky footer */}
+      <div className="px-4 pt-3 pb-4 shrink-0">
+        <button
+          onClick={handleSave}
+          className="w-full bg-indigo-600 text-white text-xs font-bold py-2.5 rounded-xl hover:bg-indigo-700 transition-colors"
+        >
+          Apply Changes
+        </button>
+      </div>
     </motion.div>
   );
 

@@ -196,6 +196,7 @@ const Flowchart: React.FC<{ steps: TimelineStep[] }> = ({ steps }) => {
   let t = 0;
   let pk = 0;
   let nk = 0;
+  const skippedItemIndices = new Set<number>();
 
   const addPath = (d: string, dur: number, at?: number) => {
     const delay = at ?? t;
@@ -278,6 +279,7 @@ const Flowchart: React.FC<{ steps: TimelineStep[] }> = ({ steps }) => {
   };
 
   items.forEach((item, i) => {
+    if (skippedItemIndices.has(i)) return;
     const { step, nodeY, labelY, splitY, branchY, branchLabelY, retY } = item;
     const isA = step.kind !== 'start' && step.kind !== 'end';
     const next = items[i + 1];
@@ -349,25 +351,39 @@ const Flowchart: React.FC<{ steps: TimelineStep[] }> = ({ steps }) => {
       addNode(sLX, branchY!, 'bg-emerald-50', 'border-emerald-300', ThumbsUp, 'text-emerald-600');
       addLabel(sLX, branchLabelY!, isFork ? BR_FORK_LW : BR_LW, 'Approved');
 
-      // Notify branch: splits LEFT off the Approved downward path, below the Approved label
+      // Notify branch: symmetric split off the Approved downward path
       if (step.notifyActor) {
         const NTX = sLX - 90;
+        const ntRX = sLX + 90;
         const ntSplitY = branchLabelY! + G.B_LABEL_H + 14;
         const ntNodeY = ntSplitY + G.DROP;
         const ntLabelY = ntNodeY + NR + 7;
 
-        // Branch arm: from the Approved downward line, go left with rounded corner, then down to notify node
+        // Vertical connector: Approved bottom → split point
+        addPath(`M ${sLX},${branchY! + NR} L ${sLX},${ntSplitY}`, 0.18);
+
+        // Left arm: split → notify (mail) node
         addPath(
           `M ${sLX},${ntSplitY} L ${NTX + R},${ntSplitY} Q ${NTX},${ntSplitY} ${NTX},${ntSplitY + R} L ${NTX},${ntNodeY - NR}`,
           0.28
         );
 
-        // Standard-size mail icon node (same as other nodes)
-        addNode(NTX, ntNodeY, 'bg-sky-50', 'border-sky-300', Mail, 'text-sky-500');
+        // Right arm: split → end node (mirrors left arm)
+        addPath(
+          `M ${sLX},${ntSplitY} L ${ntRX - R},${ntSplitY} Q ${ntRX},${ntSplitY} ${ntRX},${ntSplitY + R} L ${ntRX},${ntNodeY - NR}`,
+          0.28
+        );
 
-        // Standard label box: "Notify [Actor]" with channel chips
+        addNode(NTX, ntNodeY, 'bg-sky-50', 'border-sky-300', Mail, 'text-sky-500');
         const ntChips = step.notifyChannels ?? ['Inbox', 'Email'];
-        addLabel(NTX, ntLabelY, BR_LW, `Notified`, undefined, ntChips, undefined, step.notifyActor);
+        addLabel(NTX, ntLabelY, BR_FORK_LW, 'Notified', undefined, ntChips, undefined, step.notifyActor);
+
+        // Render end node inline as the right branch, skipping the next step
+        if (next?.step.kind === 'end') {
+          addNode(ntRX, ntNodeY, 'bg-amber-50', 'border-amber-300', Star, 'text-amber-500', { fill: 'currentColor', stroke: 'currentColor' });
+          addLabel(ntRX, ntLabelY, BR_FORK_LW, 'Request Approved', 'Email sent to employee.');
+          skippedItemIndices.add(i + 1);
+        }
       }
 
       if (isFork) {
@@ -412,6 +428,8 @@ const Flowchart: React.FC<{ steps: TimelineStep[] }> = ({ steps }) => {
         t += DU * 1.4;
 
         // Return from Approved (sLX) → to CX → down to next step
+        // (skipped when end node was rendered inline via notifyActor)
+        if (!skippedItemIndices.has(i + 1)) {
         if (isForkChild) {
           // Left branch already at CX — go straight down to star
           if (next) {
@@ -431,6 +449,7 @@ const Flowchart: React.FC<{ steps: TimelineStep[] }> = ({ steps }) => {
             );
           }
         }
+        } // end !skippedItemIndices
       }
     } else {
       if (next) {
