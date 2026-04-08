@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { ApprovalWorkflow, WorkflowRule, Message, ValidationIssue, WorkflowNode } from '../types';
 import { ChatPanel } from './ChatPanel';
 import { Save, Upload, Pencil, Trash2, Sparkles, Send } from 'lucide-react';
@@ -163,6 +163,28 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
     onPublish(published);
   }, [workflow, onPublish]);
 
+  const FLOATING_SUGGESTIONS = [
+    'Add backup approvers for when manager is out of office...',
+    'Add a 3-day timeout with escalation to VP...',
+    'Require CEO approval for the Engineering department...',
+    'Notify HR when a request is submitted...',
+    'Add a separate rule for employees in the UK...',
+    'Route parental leave requests directly to HR...',
+  ];
+  const [suggestionIdx, setSuggestionIdx] = useState(0);
+  const [suggestionVisible, setSuggestionVisible] = useState(true);
+  useEffect(() => {
+    if (draftState !== 'none') return;
+    const interval = setInterval(() => {
+      setSuggestionVisible(false); // fade out
+      setTimeout(() => {
+        setSuggestionIdx((prev) => (prev + 1) % FLOATING_SUGGESTIONS.length);
+        setSuggestionVisible(true); // fade in with new text
+      }, 300);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [draftState]);
+
   const handleFloatingSubmit = useCallback(() => {
     const msg = floatingInput.trim();
     if (!msg) return;
@@ -304,15 +326,24 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
                     <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
                       <div className="flex items-center gap-3 px-4 py-3.5">
                         <Sparkles size={16} className="text-indigo-500 shrink-0" />
-                        <input
-                          type="text"
-                          value={floatingInput}
-                          onChange={(e) => setFloatingInput(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') handleFloatingSubmit(); }}
-                          placeholder="Ask AI to edit this workflow..."
-                          className="flex-1 text-sm outline-none placeholder-slate-400 text-slate-700 bg-transparent"
-                          autoFocus
-                        />
+                        <div className="flex-1 relative">
+                          <input
+                            type="text"
+                            value={floatingInput}
+                            onChange={(e) => setFloatingInput(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleFloatingSubmit(); }}
+                            className="w-full text-sm outline-none text-slate-700 bg-transparent relative z-10"
+                            autoFocus
+                          />
+                          {!floatingInput && (
+                            <span
+                              className="absolute inset-0 flex items-center text-sm text-slate-400 pointer-events-none transition-opacity duration-300"
+                              style={{ opacity: suggestionVisible ? 1 : 0 }}
+                            >
+                              {FLOATING_SUGGESTIONS[suggestionIdx]}
+                            </span>
+                          )}
+                        </div>
                         <button
                           onClick={handleFloatingSubmit}
                           disabled={!floatingInput.trim()}
