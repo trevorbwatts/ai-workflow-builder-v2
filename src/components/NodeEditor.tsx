@@ -110,10 +110,9 @@ interface NodeEditorProps {
   onSave: (newValue: any) => void;
   onRemove?: () => void;
   anchorRect: DOMRect;
-  hasMultipleVariants?: boolean;
 }
 
-export const NodeEditor: React.FC<NodeEditorProps> = ({ node, onClose, onSave, onRemove, anchorRect, hasMultipleVariants = false }) => {
+export const NodeEditor: React.FC<NodeEditorProps> = ({ node, onClose, onSave, onRemove, anchorRect }) => {
   const [value, setValue] = useState<any>(structuredClone(node.value));
 
   const handleSave = () => onSave(value);
@@ -170,10 +169,10 @@ export const NodeEditor: React.FC<NodeEditorProps> = ({ node, onClose, onSave, o
       {/* Scrollable body */}
       <div className="overflow-y-auto px-4 flex-1 min-h-0">
         {node.type === 'scope' && (
-          <ScopeEditor value={value as ScopeValue} onChange={setValue} hasMultipleVariants={hasMultipleVariants} />
+          <ScopeEditor value={value as ScopeValue} onChange={setValue} />
         )}
         {node.type === 'time_off_type' && (
-          <TimeOffTypeEditor value={value as TimeOffTypeValue} onChange={setValue} hasMultipleVariants={hasMultipleVariants} />
+          <TimeOffTypeEditor value={value as TimeOffTypeValue} onChange={setValue} />
         )}
         {node.type === 'approvers' && (
           <ApproversEditor value={value as ApproversValue} onChange={setValue} />
@@ -595,15 +594,12 @@ const SCOPE_ATTRIBUTE_ALL_OTHER: SelectOption = { value: 'all_other', label: 'Al
 interface ScopeEditorProps {
   value: ScopeValue;
   onChange: (v: ScopeValue) => void;
-  hasMultipleVariants?: boolean;
 }
 
-const ScopeEditor: React.FC<ScopeEditorProps> = ({ value, onChange, hasMultipleVariants = false }) => {
+const ScopeEditor: React.FC<ScopeEditorProps> = ({ value, onChange }) => {
   const options = value.attribute !== 'all' && value.attribute !== 'all_other' ? SCOPE_OPTIONS[value.attribute] ?? [] : [];
 
-  const scopeAttributeOptions = hasMultipleVariants
-    ? [SCOPE_ATTRIBUTES_BASE[0], SCOPE_ATTRIBUTE_ALL_OTHER, ...SCOPE_ATTRIBUTES_BASE.slice(1)]
-    : SCOPE_ATTRIBUTES_BASE;
+  const scopeAttributeOptions = [SCOPE_ATTRIBUTES_BASE[0], SCOPE_ATTRIBUTE_ALL_OTHER, ...SCOPE_ATTRIBUTES_BASE.slice(1)];
 
   return (
     <div className="space-y-3">
@@ -693,13 +689,10 @@ const TIME_OFF_TYPE_ALL_OTHER: SelectOption = { value: 'all_other', label: 'All 
 interface TimeOffTypeEditorProps {
   value: TimeOffTypeValue;
   onChange: (v: TimeOffTypeValue) => void;
-  hasMultipleVariants?: boolean;
 }
 
-const TimeOffTypeEditor: React.FC<TimeOffTypeEditorProps> = ({ value, onChange, hasMultipleVariants = false }) => {
-  const options = hasMultipleVariants
-    ? [TIME_OFF_TYPE_OPTIONS_BASE[0], TIME_OFF_TYPE_ALL_OTHER, ...TIME_OFF_TYPE_OPTIONS_BASE.slice(1)]
-    : TIME_OFF_TYPE_OPTIONS_BASE;
+const TimeOffTypeEditor: React.FC<TimeOffTypeEditorProps> = ({ value, onChange }) => {
+  const options = [TIME_OFF_TYPE_OPTIONS_BASE[0], TIME_OFF_TYPE_ALL_OTHER, ...TIME_OFF_TYPE_OPTIONS_BASE.slice(1)];
 
   return (
     <CustomSelect

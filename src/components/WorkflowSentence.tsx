@@ -1,17 +1,24 @@
 import React, { useState } from 'react';
-import { Workflow } from '../types';
+import { WorkflowNode } from '../types';
 import { displayNodeValue } from '../lib/nodes';
 import { AnimatePresence } from 'motion/react';
 import { NodeEditor } from './NodeEditor';
 
 type EditingState = { id: string; rect: DOMRect } | null;
 
+// Accept either a full Workflow or a minimal { template, nodes, ... } shape (e.g., WorkflowRule)
+interface WorkflowLike {
+  template: string;
+  nodes: Record<string, WorkflowNode>;
+  [key: string]: any;
+}
+
 interface WorkflowSentenceProps {
-  workflow: Workflow;
+  workflow: WorkflowLike;
   onUpdateNode?: (id: string, newValue: any) => void;
   onRemoveNode?: (id: string) => void;
   readOnly?: boolean;
-  hasMultipleVariants?: boolean;
+  inline?: boolean;  // renders as <span> instead of <div> for flowing paragraphs
 }
 
 export const WorkflowSentence: React.FC<WorkflowSentenceProps> = ({
@@ -19,14 +26,16 @@ export const WorkflowSentence: React.FC<WorkflowSentenceProps> = ({
   onUpdateNode,
   onRemoveNode,
   readOnly = false,
-  hasMultipleVariants = false,
+  inline = false,
 }) => {
   const [editing, setEditing] = useState<EditingState>(null);
 
   const parts = workflow.template.split(/(\{[^{}]+\})/);
 
+  const Wrapper = inline ? 'span' : 'div';
+
   return (
-    <div className="workflow-text text-slate-700 leading-relaxed">
+    <Wrapper className="workflow-text text-slate-700 leading-relaxed">
       {parts.map((part, i) => {
         if (!part.startsWith('{') || !part.endsWith('}')) {
           return <span key={i}>{part}</span>;
@@ -78,7 +87,6 @@ export const WorkflowSentence: React.FC<WorkflowSentenceProps> = ({
                   node={node}
                   anchorRect={editing.rect}
                   onClose={() => setEditing(null)}
-                  hasMultipleVariants={hasMultipleVariants}
                   onSave={(newValue) => {
                     onUpdateNode?.(nodeId, newValue);
                     setEditing(null);
@@ -93,6 +101,6 @@ export const WorkflowSentence: React.FC<WorkflowSentenceProps> = ({
           </span>
         );
       })}
-    </div>
+    </Wrapper>
   );
 };

@@ -92,6 +92,7 @@ export type ConditionAttribute =
   | 'department'
   | 'division'
   | 'employment_status'
+  | 'team'
   | 'person';
 
 export interface WorkflowCondition {
@@ -103,4 +104,35 @@ export interface WorkflowCondition {
 export interface WorkflowFilter {
   logic: 'AND' | 'OR';
   conditions: WorkflowCondition[];
+}
+
+// ─── New: Rules-based approval workflow model ─────────────────────────────────
+
+export interface WorkflowRule {
+  id: string;
+  label: string;
+  filter: WorkflowFilter | null;           // null = catch-all/default rule
+  template: string;
+  nodes: Record<string, WorkflowNode>;
+}
+
+export interface ApprovalWorkflow {
+  id: string;
+  name: string;
+  icon: string;                            // lucide icon name
+  rules: WorkflowRule[];
+  defaultRuleId: string;
+  status: WorkflowStatus;
+  pendingDraft?: {
+    rules: WorkflowRule[];
+    defaultRuleId: string;
+  };
+}
+
+export interface ValidationIssue {
+  ruleId?: string;
+  kind: 'gap' | 'redundancy' | 'missing_escalation' | 'missing_approver' | 'empty_rule';
+  severity: 'error' | 'warning';
+  message: string;
+  nodeId?: string;
 }

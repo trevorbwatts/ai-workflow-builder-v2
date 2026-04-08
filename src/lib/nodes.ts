@@ -1,4 +1,4 @@
-import { NodeType, NodeValue, ApproversValue, ScopeValue, TimeoutValue, AdvanceNoticeValue, TimeOffTypeValue, StatusConditionValue, NotifyValue } from '../types';
+import { NodeType, NodeValue, ApproversValue, ScopeValue, TimeoutValue, AdvanceNoticeValue, TimeOffTypeValue, StatusConditionValue, NotifyValue, WorkflowFilter, ConditionAttribute } from '../types';
 
 export const APPROVAL_ROLES = [
   'CEO', 'CFO', 'COO',
@@ -141,23 +141,46 @@ export function displayNodeValueLabel(type: NodeType, value: NodeValue): string 
   return displayNodeValue(type, value);
 }
 
+// Converts a ScopeValue (from scope node) to a WorkflowFilter for the rule
+export function scopeValueToFilter(v: ScopeValue): WorkflowFilter | null {
+  if (v.attribute === 'all' || v.attribute === 'all_other' || !v.value) return null;
+  const attr = v.attribute as unknown as ConditionAttribute;
+  return { logic: 'AND', conditions: [{ attribute: attr, operator: 'is', value: v.value }] };
+}
+
+export function displayFilterSummary(filter: WorkflowFilter | null): string {
+  if (!filter || filter.conditions.length === 0) return 'All Employees';
+  const parts = filter.conditions.map((c) => {
+    const label = c.attribute === 'location_country' ? 'Country'
+      : c.attribute === 'location_state' ? 'State'
+      : c.attribute === 'department' ? 'Department'
+      : c.attribute === 'division' ? 'Division'
+      : c.attribute === 'employment_status' ? 'Employment Status'
+      : c.attribute === 'person' ? 'Person'
+      : c.attribute;
+    const op = c.operator === 'is' ? 'is' : 'is not';
+    return `${label} ${op} ${c.value}`;
+  });
+  const joiner = filter.logic === 'AND' ? ' and ' : ' or ';
+  return parts.join(joiner);
+}
+
 export const NODE_LIBRARY_DESCRIPTION = `
 AVAILABLE NODE TYPES (you may ONLY use these):
 
-1. "scope" — Defines who this workflow applies to. Always the first node.
-   value shape: { attribute: "all" | "location_country" | "location_state" | "department" | "division" | "employment_status" | "team", value: string }
-   For "all": value is "". For others: value is the specific group name.
-
-2. "approvers" — Defines who approves or receives a request.
+1. "approvers" — Defines who approves or receives a request.
    value shape: { operator: "AND" | "OR", operands: string[] }
    Operand values: "manager", "managers manager", "role:CEO", "role:HR Manager", "person:Jane Smith", etc.
    For sequential approvals, use multiple approver nodes in the template with ", then " between them.
 
-3. "timeout" — A duration before the next step triggers (e.g. escalation).
+2. "timeout" — A duration before the next step triggers (e.g. escalation).
    value shape: { amount: number, unit: "hours" | "days" | "weeks" }
 
-4. "advance_notice" — A time threshold for a conditional branch.
+3. "advance_notice" — A time threshold for a conditional branch.
    value shape: { amount: number, unit: "hours" | "days", comparison: "less_than" | "greater_than" }
+
+4. "time_off_type" — Specifies which types of time-off this rule handles.
+   value shape: { attribute: "all" | "pto" | "sick_leave" | "bereavement" | "parental_leave" }
 
 5. "status_condition" — A condition that triggers routing when the approver has a specific status.
    value shape: { triggers: Array<"out_of_office" | "on_leave" | "terminated"> }
@@ -173,4 +196,16 @@ AVAILABLE NODE TYPES (you may ONLY use these):
    Place directly after the approver node it's associated with, using "and notify {notify_id}" in the template.
    Example: "...approved by {approvers} and notify {notify_approvers}, then {secondary}."
    The node display renders as: "HR Manager via Email and Inbox"
+
+RULE FILTER SYSTEM:
+Each rule has a "filter" that determines which employees it applies to.
+A filter is either null (catch-all, applies to all employees) or:
+{ logic: "AND" | "OR", conditions: [{ attribute: "department" | "location_country" | "location_state" | "division" | "employment_status" | "person", operator: "is" | "is_not", value: string }] }
+SCOPE NODE (required, always first in every rule):
+Every rule MUST have a "scope" node as its first node. Template always starts with "For {scope}, ...".
+scope value shape: { attribute: "all" | "all_other" | "location_country" | "location_state" | "department" | "division" | "employment_status" | "team", value: string }
+For "all" or "all_other": value is "". For others: value is the specific group (e.g., "United Kingdom", "Engineering").
+When you create or update a scope node, also update rule.filter to match:
+- attribute "all" or "all_other" → filter: null
+- attribute "location_country", value "United Kingdom" → filter: { logic: "AND", conditions: [{ attribute: "location_country", operator: "is", value: "United Kingdom" }] }
 `;
