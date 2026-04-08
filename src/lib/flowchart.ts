@@ -109,7 +109,7 @@ export function parseWorkflowSteps(
         }
         i = lookAhead + 2; continue;
       }
-      steps.push({ kind: 'notify', actor: displayNodeValueLabel(node.type, node.value), backup, notifyActor, notifyChannels, nodeId: id });
+      steps.push({ kind: 'notify', actor: displayNodeValueLabel(node.type, node.value), backup, nodeId: id });
       i = lookAhead; continue;
     }
     i++;

@@ -1,5 +1,14 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { ApprovalWorkflow, WorkflowRule, Message, ValidationIssue, WorkflowNode } from '../types';
+
+const FLOATING_SUGGESTIONS = [
+  'Add backup approvers for when manager is out of office...',
+  'Add a 3-day timeout with escalation to VP...',
+  'Require CEO approval for the Engineering department...',
+  'Notify HR when a request is submitted...',
+  'Add a separate rule for employees in the UK...',
+  'Route parental leave requests directly to HR...',
+];
 import { ChatPanel } from './ChatPanel';
 import { Save, Upload, Pencil, Trash2, Sparkles, Send } from 'lucide-react';
 import { BranchingFlowchart } from './BranchingFlowchart';
@@ -163,26 +172,22 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
     onPublish(published);
   }, [workflow, onPublish]);
 
-  const FLOATING_SUGGESTIONS = [
-    'Add backup approvers for when manager is out of office...',
-    'Add a 3-day timeout with escalation to VP...',
-    'Require CEO approval for the Engineering department...',
-    'Notify HR when a request is submitted...',
-    'Add a separate rule for employees in the UK...',
-    'Route parental leave requests directly to HR...',
-  ];
   const [suggestionIdx, setSuggestionIdx] = useState(0);
   const [suggestionVisible, setSuggestionVisible] = useState(true);
+  const fadeTimeout = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => {
     if (draftState !== 'none') return;
     const interval = setInterval(() => {
-      setSuggestionVisible(false); // fade out
-      setTimeout(() => {
+      setSuggestionVisible(false);
+      fadeTimeout.current = setTimeout(() => {
         setSuggestionIdx((prev) => (prev + 1) % FLOATING_SUGGESTIONS.length);
-        setSuggestionVisible(true); // fade in with new text
+        setSuggestionVisible(true);
       }, 300);
     }, 4000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(fadeTimeout.current);
+    };
   }, [draftState]);
 
   const handleFloatingSubmit = useCallback(() => {
