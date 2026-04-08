@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import { ApprovalWorkflow, WorkflowRule, Message, ValidationIssue, WorkflowNode } from '../types';
 import { ChatPanel } from './ChatPanel';
-import { Save, Upload, Pencil, Trash2 } from 'lucide-react';
+import { Save, Upload, Pencil, Trash2, Sparkles, Send } from 'lucide-react';
 import { BranchingFlowchart } from './BranchingFlowchart';
 import { WorkflowSentence } from './WorkflowSentence';
 import { NodeEditor } from './NodeEditor';
@@ -32,6 +32,8 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
 
   // none → no draft box shown; unsaved → "Draft"; saved → "Saved Draft"
   const [draftState, setDraftState] = useState<DraftState>('none');
+  const [chatOpen, setChatOpen] = useState(false);
+  const [floatingInput, setFloatingInput] = useState('');
 
   const [activeRuleId, setActiveRuleId] = useState(workflow.rules[0]?.id ?? '');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -161,6 +163,15 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
     onPublish(published);
   }, [workflow, onPublish]);
 
+  const handleFloatingSubmit = useCallback(() => {
+    const msg = floatingInput.trim();
+    if (!msg) return;
+    setFloatingInput('');
+    setDraftState('unsaved');
+    setChatOpen(true);
+    handleSendMessage(msg);
+  }, [floatingInput, handleSendMessage]);
+
   const hasErrors = validationIssues.some((i) => i.severity === 'error');
   const editingNodeData = editingNode && workflow.rules.find((r) => r.id === editingNode.ruleId)?.nodes[editingNode.nodeId];
 
@@ -173,7 +184,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
     <div className="flex flex-col h-full">
       <div className="flex-1 flex min-h-0">
         {/* Left: Summary boxes + Flowchart */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
           {/* Published box — always visible, read-only */}
           <div className="border-b border-slate-200 bg-white px-5 py-3">
@@ -181,12 +192,12 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
               <div className="flex items-center gap-2">
                 <h2 className="text-lg font-bold text-slate-900">{workflow.name}</h2>
                 <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">
-                  Published
+                  Live
                 </span>
               </div>
               {draftState === 'none' && (
                 <button
-                  onClick={() => setDraftState('unsaved')}
+                  onClick={() => { setDraftState('unsaved'); setChatOpen(true); }}
                   className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
                 >
                   <Pencil size={12} /> Edit
@@ -199,6 +210,10 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
                   key={rule.id + rule.template}
                   workflow={rule}
                   readOnly
+                  onNodeActivate={() => {
+                    setDraftState('unsaved');
+                    setChatOpen(true);
+                  }}
                 />
               ))}
             </div>
@@ -223,7 +238,9 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
                       onClick={() => {
                         setWorkflow((prev) => ({ ...prev, rules: publishedRules }));
                         setDraftState('none');
+                        setChatOpen(false);
                         setValidationIssues([]);
+                        setMessages([]);
                       }}
                       className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-500 hover:bg-white hover:text-red-500 hover:border-red-200 transition-colors"
                     >
@@ -259,27 +276,81 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
             )}
           </AnimatePresence>
 
-          {/* Flowchart Canvas — always shows working copy */}
-          <PannableCanvas workflowId={`${workflow.id}-${activeRuleId}`}>
-            <BranchingFlowchart
-              rules={workflow.rules}
-              activeRuleId={activeRuleId}
-              workflowName={workflow.name}
-              onNodeClick={handleNodeClick}
-              validationIssues={validationIssues}
-            />
-          </PannableCanvas>
+          {/* Canvas area — fills remaining height, anchors floating bar */}
+          <div className="flex-1 relative min-h-0 flex flex-col">
+            <PannableCanvas workflowId={`${workflow.id}-${activeRuleId}`}>
+              <BranchingFlowchart
+                rules={workflow.rules}
+                activeRuleId={activeRuleId}
+                workflowName={workflow.name}
+                onNodeClick={handleNodeClick}
+                validationIssues={validationIssues}
+              />
+            </PannableCanvas>
+
+            {/* Floating prompt bar — visible until user opens draft */}
+            <AnimatePresence>
+              {draftState === 'none' && (
+                <div
+                  style={{ position: 'absolute', bottom: 28, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}
+                >
+                  <motion.div
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 16 }}
+                    transition={{ type: 'spring', damping: 28, stiffness: 220, delay: 0.2 }}
+                    style={{ pointerEvents: 'auto', width: '100%', maxWidth: 560, padding: '0 16px' }}
+                  >
+                    <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+                      <div className="flex items-center gap-3 px-4 py-3.5">
+                        <Sparkles size={16} className="text-indigo-500 shrink-0" />
+                        <input
+                          type="text"
+                          value={floatingInput}
+                          onChange={(e) => setFloatingInput(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleFloatingSubmit(); }}
+                          placeholder="Ask AI to edit this workflow..."
+                          className="flex-1 text-sm outline-none placeholder-slate-400 text-slate-700 bg-transparent"
+                          autoFocus
+                        />
+                        <button
+                          onClick={handleFloatingSubmit}
+                          disabled={!floatingInput.trim()}
+                          className="p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                        >
+                          <Send size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                </div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
 
-        {/* Right: Chat Panel */}
-        <div className="w-[380px] shrink-0">
-          <ChatPanel
-            messages={messages}
-            onSend={handleSendMessage}
-            isLoading={isLoading}
-            validationIssues={validationIssues}
-          />
-        </div>
+        {/* Right: Chat Panel — slides in when Edit is clicked */}
+        <AnimatePresence>
+          {chatOpen && (
+            <motion.div
+              key="chat-panel"
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 380, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 220 }}
+              className="shrink-0 overflow-hidden"
+            >
+              <div className="w-[380px] h-full">
+                <ChatPanel
+                  messages={messages}
+                  onSend={handleSendMessage}
+                  isLoading={isLoading}
+                  validationIssues={validationIssues}
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* NodeEditor portal */}

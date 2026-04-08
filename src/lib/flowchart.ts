@@ -3,7 +3,7 @@ import { displayNodeValueLabel, displayStatusConditionValue, formatOperandLabel 
 
 // ─── Step Types ──────────────────────────────────────────────────────────────
 
-export type StepKind = 'start' | 'notify' | 'fork' | 'condition_fork' | 'end';
+export type StepKind = 'start' | 'notify' | 'fork' | 'condition_fork' | 'end' | 'notify_split';
 
 export interface TimelineStep {
   kind: StepKind;
@@ -52,13 +52,19 @@ export function parseWorkflowSteps(
 
     if (node.type === 'approvers') {
       let lookAhead = i + 1;
-      let notifyActor: string | undefined;
-      let notifyChannels: string[] | undefined;
       const peekNode = nodes[ids[lookAhead]];
+
+      // If next node is a notify, emit it as a separate parallel split step
       if (peekNode?.type === 'notify') {
         const nv = peekNode.value as NotifyValue;
-        notifyActor = nv.operands?.length > 0 ? nv.operands.map(formatOperandLabel).join(' and ') : undefined;
-        notifyChannels = nv.channels?.map((c) => c === 'email' ? 'Email' : 'Inbox');
+        const nActor = nv.operands?.length > 0 ? nv.operands.map(formatOperandLabel).join(' and ') : undefined;
+        const nChannels = nv.channels?.map((c) => c === 'email' ? 'Email' : 'Inbox');
+        steps.push({
+          kind: 'notify_split',
+          notifyActor: nActor,
+          notifyChannels: nChannels,
+          nodeId: ids[lookAhead],
+        });
         lookAhead++;
       }
 
@@ -75,7 +81,6 @@ export function parseWorkflowSteps(
           conditionTriggers: displayStatusConditionValue(nextNode.value as StatusConditionValue),
           conditionBackupActor: bn ? displayNodeValueLabel(bn.type, bn.value) : undefined,
           backup,
-          notifyActor, notifyChannels,
           nodeId: id,
         });
         if (bn) {
@@ -94,7 +99,6 @@ export function parseWorkflowSteps(
           forkTimeout: fmt(nextNode.value as TimeoutValue),
           forkEscalationActor: en ? displayNodeValueLabel(en.type, en.value) : undefined,
           backup,
-          notifyActor, notifyChannels,
           nodeId: id,
         });
         if (en) {

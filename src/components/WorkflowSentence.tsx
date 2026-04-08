@@ -17,6 +17,7 @@ interface WorkflowSentenceProps {
   workflow: WorkflowLike;
   onUpdateNode?: (id: string, newValue: any) => void;
   onRemoveNode?: (id: string) => void;
+  onNodeActivate?: (nodeId: string, rect: DOMRect) => void; // fired on click in readOnly mode
   readOnly?: boolean;
   inline?: boolean;  // renders as <span> instead of <div> for flowing paragraphs
 }
@@ -25,6 +26,7 @@ export const WorkflowSentence: React.FC<WorkflowSentenceProps> = ({
   workflow,
   onUpdateNode,
   onRemoveNode,
+  onNodeActivate,
   readOnly = false,
   inline = false,
 }) => {
@@ -56,11 +58,16 @@ export const WorkflowSentence: React.FC<WorkflowSentenceProps> = ({
 
         if (readOnly) {
           return (
-            <span
-              key={i}
-              className="font-semibold text-indigo-600 px-0.5"
-            >
-              {displayVal}
+            <span key={i} className="inline-block">
+              <span
+                onClick={onNodeActivate ? (e) => {
+                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  onNodeActivate(nodeId, rect);
+                } : undefined}
+                className={`font-semibold text-indigo-600 px-0.5 ${onNodeActivate ? 'cursor-pointer' : ''}`}
+              >
+                {displayVal}
+              </span>
             </span>
           );
         }

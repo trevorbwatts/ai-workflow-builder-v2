@@ -1,7 +1,8 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { WorkflowRule, ValidationIssue } from '../types';
 import { parseWorkflowSteps, TimelineStep } from '../lib/flowchart';
-import { displayFilterSummary } from '../lib/nodes';
+import { displayFilterSummary, displayTimeOffTypeValue } from '../lib/nodes';
+import { TimeOffTypeValue } from '../types';
 import { motion } from 'motion/react';
 import { User, Bell, Star, ThumbsUp, ThumbsDown, Clock, UserX, Mail, Flag } from 'lucide-react';
 
@@ -53,7 +54,15 @@ function calcLayout(steps: TimelineStep[], labelHeights: number[]): { items: SL[
     const isA = step.kind !== 'start' && step.kind !== 'end';
     const lh = labelHeights[i] ?? G.LABEL_H;
 
-    if (isA) {
+    if (step.kind === 'notify_split') {
+      // Layout so next step's nodeY = branchY (same level as notify node)
+      const splitY = y + NR + 10;
+      const branchY = splitY + G.DROP;
+      const branchLabelY = branchY + NR + 7;
+      const endY = branchY - NR; // next step's nodeY will equal branchY
+      y = endY;
+      return { step, nodeY: splitY, labelY: splitY, splitY, branchY, branchLabelY, endY };
+    } else if (isA) {
       const splitY = labelY + lh + G.PRE;
       const branchY = splitY + G.DROP;
       const branchLabelY = branchY + NR + 7;
@@ -76,12 +85,13 @@ interface SingleFlowchartProps {
   steps: TimelineStep[];
   offsetX: number;
   ruleId: string;
+  startDelay?: number;
   onNodeClick?: (ruleId: string, nodeId: string, rect: DOMRect) => void;
   validationNodeIds: Set<string>;
 }
 
 const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
-  steps, offsetX, ruleId, onNodeClick, validationNodeIds,
+  steps, offsetX, ruleId, startDelay = 0, onNodeClick, validationNodeIds,
 }) => {
   const labelElsRef = useRef<(HTMLDivElement | null)[]>([]);
   const [labelHeights, setLabelHeights] = useState<number[]>(() =>
@@ -97,7 +107,7 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
 
   const pathEls: React.ReactElement[] = [];
   const nodeEls: React.ReactElement[] = [];
-  let t = 0;
+  let t = startDelay;
   let pk = 0;
   let nk = 0;
   const skippedItemIndices = new Set<number>();
@@ -203,6 +213,33 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
     if (skippedItemIndices.has(i)) return;
     const { step, nodeY, labelY, splitY, branchY, branchLabelY, retY } = item;
     const isA = step.kind !== 'start' && step.kind !== 'end';
+
+    // ── Notify split: left = notify (dead end), right = continues to next step ──
+    // Both the notify node and next step's node render at the SAME Y level.
+    if (step.kind === 'notify_split') {
+      const next = items[i + 1];
+      const R = 18;
+      const notifyX = 70 + offsetX; // further left to avoid label collision with main flow
+
+      // One continuous vertical line from prev connector end through to next step
+      if (next) {
+        addPath(`M ${CX},${nodeY - NR} L ${CX},${next.nodeY - NR}`, 0.30);
+      }
+
+      // Left arm branches off the vertical line at splitY
+      addPath(
+        `M ${CX},${splitY} L ${notifyX + R},${splitY} Q ${notifyX},${splitY} ${notifyX},${splitY! + R} L ${notifyX},${branchY! - NR}`,
+        0.30
+      );
+
+      // Notify node (Mail icon) — at same Y as next step's main node
+      addNode(notifyX, branchY!, 'bg-sky-50', 'border-sky-300', Mail, 'text-sky-500', undefined, step.nodeId);
+      const ntChips = step.notifyChannels ?? ['Inbox', 'Email'];
+      addLabel(notifyX, branchLabelY!, BR_LW, 'Notified', undefined, ntChips, undefined, step.notifyActor);
+
+      t += DU * 1.5;
+      return;
+    }
     const next = items[i + 1];
     const isForkChild = !!step.forkChild;
 
@@ -259,9 +296,15 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
       }
 
       addNode(sLX, branchY!, 'bg-emerald-50', 'border-emerald-300', ThumbsUp, 'text-emerald-600');
-      addLabel(sLX, branchLabelY!, isFork ? BR_FORK_LW : BR_LW, 'Approved');
 
-      if (step.notifyActor) {
+      if (isFork && step.notifyActor) {
+        // For fork steps, show notify info on the Approved label card (not a separate sub-branch)
+        const ntChips = step.notifyChannels ?? ['Inbox', 'Email'];
+        addLabel(sLX, branchLabelY!, BR_FORK_LW, 'Approved', `Notify ${step.notifyActor}`, ntChips);
+      } else if (step.notifyActor) {
+        // For non-fork steps, render the notify as a sub-branch off Approved
+        addLabel(sLX, branchLabelY!, BR_LW, 'Approved');
+
         const NTX = sLX - 90;
         const ntRX = sLX + 90;
         const ntSplitY = branchLabelY! + G.B_LABEL_H + 14;
@@ -287,6 +330,8 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
           addLabel(ntRX, ntLabelY, BR_FORK_LW, 'Request Approved', 'Email sent to employee.');
           skippedItemIndices.add(i + 1);
         }
+      } else {
+        addLabel(sLX, branchLabelY!, isFork ? BR_FORK_LW : BR_LW, 'Approved');
       }
 
       if (isFork) {
@@ -361,6 +406,36 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
     </div>
   );
 };
+
+// ─── Smart branch label ───────────────────────────────────────────────────────
+// Picks the right differentiating label for a rule given all sibling rules.
+// When all rules share the same scope, uses time_off_type as the differentiator.
+// When scopes differ, uses scope. When both differ, combines them.
+
+function getRuleBranchLabel(rule: WorkflowRule, allRules: WorkflowRule[]): string {
+  const allSameScope = allRules.every((r) => r.filter === null)
+    || allRules.every((r) => JSON.stringify(r.filter) === JSON.stringify(allRules[0].filter));
+
+  const scopePart = allSameScope
+    ? null
+    : rule.filter === null
+      ? 'All other employees'
+      : displayFilterSummary(rule.filter);
+
+  const timeOffVal = rule.nodes.time_off_type?.value as TimeOffTypeValue | undefined;
+  const timeOffAttr = timeOffVal?.attribute;
+  const anyTimeOff = allRules.some((r) => r.nodes.time_off_type);
+  const timeOffPart = anyTimeOff && timeOffAttr
+    ? timeOffAttr === 'all_other' ? 'All other time-off types'
+    : timeOffAttr === 'all' ? 'All other time-off requests'
+    : displayTimeOffTypeValue(timeOffVal!)
+    : null;
+
+  if (scopePart && timeOffPart) return `${scopePart} · ${timeOffPart}`;
+  if (timeOffPart) return timeOffPart;
+  if (scopePart) return scopePart;
+  return 'All employees';
+}
 
 // ─── Layout constants for the root "workflow type" node ──────────────────────
 
@@ -441,6 +516,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
             steps={steps}
             offsetX={0}
             ruleId={rule.id}
+            startDelay={0.5}
             onNodeClick={onNodeClick}
             validationNodeIds={validationNodeIds}
           />
@@ -532,9 +608,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
       {/* Branch scope labels — centered on the vertical arm segment */}
       {rules.map((rule, i) => {
         const branchCX = i * BRANCH_W + BRANCH_CX;
-        const label = rule.filter === null
-          ? 'All other employees'
-          : (rule.label || displayFilterSummary(rule.filter));
+        const label = getRuleBranchLabel(rule, rules);
         const labelY = SPLIT_Y + R + 12;
         return (
           // Outer div handles centering; inner motion.div handles animation (avoids transform conflict)
@@ -563,6 +637,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
               steps={steps}
               offsetX={0}
               ruleId={rule.id}
+              startDelay={0.7}
               onNodeClick={onNodeClick}
               validationNodeIds={validationNodeIds}
             />
