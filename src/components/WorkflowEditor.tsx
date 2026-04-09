@@ -1,16 +1,7 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { ApprovalWorkflow, WorkflowRule, Message, ValidationIssue, WorkflowNode } from '../types';
-
-const FLOATING_SUGGESTIONS = [
-  'Add backup approvers for when manager is out of office...',
-  'Add a 3-day timeout with escalation to VP...',
-  'Require CEO approval for the Engineering department...',
-  'Notify HR when a request is submitted...',
-  'Add a separate rule for employees in the UK...',
-  'Route parental leave requests directly to HR...',
-];
 import { ChatPanel } from './ChatPanel';
-import { Save, Upload, Pencil, Trash2, Sparkles, Send } from 'lucide-react';
+import { Save, Upload, Trash2, Sparkles, Send } from 'lucide-react';
 import { BranchingFlowchart } from './BranchingFlowchart';
 import { WorkflowSentence } from './WorkflowSentence';
 import { NodeEditor } from './NodeEditor';
@@ -21,7 +12,14 @@ import { scopeValueToFilter } from '../lib/nodes';
 import { ScopeValue } from '../types';
 import { AnimatePresence, motion } from 'motion/react';
 
-type DraftState = 'none' | 'unsaved' | 'saved';
+const FLOATING_SUGGESTIONS = [
+  'Add backup approvers for when manager is out of office...',
+  'Add a 3-day timeout with escalation to VP...',
+  'Require CEO approval for the Engineering department...',
+  'Notify HR when a request is submitted...',
+  'Add a separate rule for employees in the UK...',
+  'Route parental leave requests directly to HR...',
+];
 
 interface WorkflowEditorProps {
   workflow: ApprovalWorkflow;
@@ -33,14 +31,8 @@ interface WorkflowEditorProps {
 export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
   workflow: initialWorkflow, onSave, onPublish, onBack,
 }) => {
-  // The frozen published snapshot shown in the top box
-  const [publishedRules, setPublishedRules] = useState(initialWorkflow.rules);
-
-  // The working copy (draft) — starts equal to published
   const [workflow, setWorkflow] = useState<ApprovalWorkflow>(initialWorkflow);
-
-  // none → no draft box shown; unsaved → "Draft"; saved → "Saved Draft"
-  const [draftState, setDraftState] = useState<DraftState>('none');
+  const [isDirty, setIsDirty] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [floatingInput, setFloatingInput] = useState('');
 
@@ -67,7 +59,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
       runValidation(next);
       return next;
     });
-    setDraftState('unsaved');
+    setIsDirty(true);
   }, [runValidation]);
 
   const handleSendMessage = useCallback(async (msg: string) => {
@@ -79,7 +71,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
     try {
       const result = await processWorkflowEdit(workflow, activeRuleId, msg, [...messages, userMsg]);
       setWorkflow(result.updatedWorkflow);
-      setDraftState('unsaved');
+      setIsDirty(true);
       setMessages((prev) => [...prev, { role: 'model', content: result.explanation }]);
 
       const clientIssues = validateWorkflow(result.updatedWorkflow);
@@ -126,7 +118,13 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
   const handleNodeClick = useCallback((ruleId: string, nodeId: string, rect: DOMRect) => {
     setEditingNode({ ruleId, nodeId, rect });
     if (ruleId !== activeRuleId) setActiveRuleId(ruleId);
+    // Note: does NOT open the chat panel
   }, [activeRuleId]);
+
+  const handleSuggest = useCallback((prompt: string) => {
+    setChatOpen(true);
+    handleSendMessage(prompt);
+  }, [handleSendMessage]);
 
   const handleAddRule = useCallback(() => {
     const id = `rule-${Date.now()}`;
@@ -145,7 +143,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
       runValidation(next);
       return next;
     });
-    setDraftState('unsaved');
+    setIsDirty(true);
     setActiveRuleId(id);
   }, [activeRule, runValidation]);
 
@@ -156,27 +154,37 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
       runValidation(next);
       return next;
     });
-    setDraftState('unsaved');
+    setIsDirty(true);
     if (activeRuleId === ruleId) setActiveRuleId(workflow.rules[0]?.id ?? '');
   }, [workflow.defaultRuleId, workflow.rules, activeRuleId, runValidation]);
 
+  const handleDiscard = useCallback(() => {
+    setWorkflow(initialWorkflow);
+    setIsDirty(false);
+    setChatOpen(false);
+    setMessages([]);
+    setValidationIssues([]);
+    setEditingNode(null);
+  }, [initialWorkflow]);
+
   const handleSave = useCallback(() => {
     onSave(workflow);
-    setDraftState('saved');
+    setIsDirty(false);
   }, [workflow, onSave]);
 
   const handlePublish = useCallback(() => {
-    const published = { ...workflow, status: 'published' as const };
-    setPublishedRules(workflow.rules);
-    setDraftState('none');
-    onPublish(published);
+    onPublish({ ...workflow, status: 'published' as const });
+    setIsDirty(false);
   }, [workflow, onPublish]);
 
+  const hasErrors = validationIssues.some((i) => i.severity === 'error');
+  const editingNodeData = editingNode && workflow.rules.find((r) => r.id === editingNode.ruleId)?.nodes[editingNode.nodeId];
+
+  // Floating suggestion cycling
   const [suggestionIdx, setSuggestionIdx] = useState(0);
   const [suggestionVisible, setSuggestionVisible] = useState(true);
   const fadeTimeout = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => {
-    if (draftState !== 'none') return;
     const interval = setInterval(() => {
       setSuggestionVisible(false);
       fadeTimeout.current = setTimeout(() => {
@@ -188,122 +196,74 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
       clearInterval(interval);
       clearTimeout(fadeTimeout.current);
     };
-  }, [draftState]);
+  }, []);
 
   const handleFloatingSubmit = useCallback(() => {
     const msg = floatingInput.trim();
     if (!msg) return;
     setFloatingInput('');
-    setDraftState('unsaved');
     setChatOpen(true);
     handleSendMessage(msg);
   }, [floatingInput, handleSendMessage]);
 
-  const hasErrors = validationIssues.some((i) => i.severity === 'error');
-  const editingNodeData = editingNode && workflow.rules.find((r) => r.id === editingNode.ruleId)?.nodes[editingNode.nodeId];
-
-  const draftBadge = draftState === 'saved'
-    ? 'bg-sky-50 text-sky-700 border-sky-200'
-    : 'bg-amber-50 text-amber-700 border-amber-200';
-  const draftLabel = draftState === 'saved' ? 'Saved Draft' : 'Draft';
+  const statusBadge = isDirty
+    ? { label: 'Has Unpublished Changes', cls: 'bg-amber-50 text-amber-700 border-amber-200' }
+    : { label: 'Published', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 flex min-h-0">
-        {/* Left: Summary boxes + Flowchart */}
+        {/* Left: Summary + Flowchart */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
-          {/* Published box — always visible, read-only */}
+          {/* Summary bar — always editable */}
           <div className="border-b border-slate-200 bg-white px-5 py-3">
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <h2 className="text-lg font-bold text-slate-900">{workflow.name}</h2>
-                <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">
-                  Live
+                <span className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border ${statusBadge.cls}`}>
+                  {statusBadge.label}
                 </span>
               </div>
-              {draftState === 'none' && (
+              <div className="flex items-center gap-2">
                 <button
-                  onClick={() => { setDraftState('unsaved'); setChatOpen(true); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                  onClick={handleDiscard}
+                  disabled={!isDirty}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-500 hover:text-red-500 hover:border-red-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  <Pencil size={12} /> Edit
+                  <Trash2 size={12} /> Discard Changes
                 </button>
-              )}
+                <button
+                  onClick={handleSave}
+                  disabled={!isDirty}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Save size={12} /> Save &amp; Finish Later
+                </button>
+                <button
+                  onClick={handlePublish}
+                  disabled={hasErrors}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Upload size={12} /> Save &amp; Publish
+                </button>
+              </div>
             </div>
+
+            {/* Editable sentence — always active */}
             <div className="workflow-text text-slate-700 leading-relaxed">
-              {publishedRules.map((rule) => (
+              {workflow.rules.map((rule) => (
                 <WorkflowSentence
                   key={rule.id + rule.template}
                   workflow={rule}
-                  readOnly
-                  onNodeActivate={() => {
-                    setDraftState('unsaved');
-                    setChatOpen(true);
-                  }}
+                  onUpdateNode={(nodeId, val) => handleUpdateNodeForRule(rule.id, nodeId, val)}
+                  onRemoveNode={(nodeId) => handleRemoveNodeForRule(rule.id, nodeId)}
                 />
               ))}
             </div>
           </div>
 
-          {/* Draft box — slides in when edits are made */}
-          <AnimatePresence>
-            {draftState !== 'none' && (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ type: 'spring', damping: 28, stiffness: 220 }}
-                className="border-b border-slate-200 bg-slate-50 px-5 py-3"
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border ${draftBadge}`}>
-                    {draftLabel}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setWorkflow((prev) => ({ ...prev, rules: publishedRules }));
-                        setDraftState('none');
-                        setChatOpen(false);
-                        setValidationIssues([]);
-                        setMessages([]);
-                      }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-500 hover:bg-white hover:text-red-500 hover:border-red-200 transition-colors"
-                    >
-                      <Trash2 size={12} /> Discard
-                    </button>
-                    <button
-                      onClick={handleSave}
-                      disabled={draftState === 'saved'}
-                      className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 hover:bg-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <Save size={12} /> Save
-                    </button>
-                    <button
-                      onClick={handlePublish}
-                      disabled={hasErrors}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <Upload size={12} /> Publish
-                    </button>
-                  </div>
-                </div>
-                <div className="workflow-text text-slate-700 leading-relaxed">
-                  {workflow.rules.map((rule) => (
-                    <WorkflowSentence
-                      key={rule.id + rule.template}
-                      workflow={rule}
-                      onUpdateNode={(nodeId, val) => handleUpdateNodeForRule(rule.id, nodeId, val)}
-                      onRemoveNode={(nodeId) => handleRemoveNodeForRule(rule.id, nodeId)}
-                    />
-                  ))}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Canvas area — fills remaining height, anchors floating bar */}
+          {/* Canvas area */}
           <div className="flex-1 relative min-h-0 flex flex-col">
             <PannableCanvas workflowId={`${workflow.id}-${activeRuleId}`}>
               <BranchingFlowchart
@@ -311,16 +271,15 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
                 activeRuleId={activeRuleId}
                 workflowName={workflow.name}
                 onNodeClick={handleNodeClick}
+                onSuggest={handleSuggest}
                 validationIssues={validationIssues}
               />
             </PannableCanvas>
 
-            {/* Floating prompt bar — visible until user opens draft */}
+            {/* Floating prompt bar */}
             <AnimatePresence>
-              {draftState === 'none' && (
-                <div
-                  style={{ position: 'absolute', bottom: 28, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}
-                >
+              {!chatOpen && (
+                <div style={{ position: 'absolute', bottom: 28, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
                   <motion.div
                     initial={{ opacity: 0, y: 16 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -338,7 +297,6 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
                             onChange={(e) => setFloatingInput(e.target.value)}
                             onKeyDown={(e) => { if (e.key === 'Enter') handleFloatingSubmit(); }}
                             className="w-full text-sm outline-none text-slate-700 bg-transparent relative z-10"
-                            autoFocus
                           />
                           {!floatingInput && (
                             <span
@@ -365,7 +323,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
           </div>
         </div>
 
-        {/* Right: Chat Panel — slides in when Edit is clicked */}
+        {/* Right: Chat Panel — only opens via floating bar */}
         <AnimatePresence>
           {chatOpen && (
             <motion.div

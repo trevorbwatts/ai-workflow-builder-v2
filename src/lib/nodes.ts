@@ -151,15 +151,25 @@ export function scopeValueToFilter(v: ScopeValue): WorkflowFilter | null {
 export function displayFilterSummary(filter: WorkflowFilter | null): string {
   if (!filter || filter.conditions.length === 0) return 'All Employees';
   const parts = filter.conditions.map((c) => {
-    const label = c.attribute === 'location_country' ? 'Country'
-      : c.attribute === 'location_state' ? 'State'
-      : c.attribute === 'department' ? 'Department'
-      : c.attribute === 'division' ? 'Division'
-      : c.attribute === 'employment_status' ? 'Employment Status'
-      : c.attribute === 'person' ? 'Person'
-      : c.attribute;
-    const op = c.operator === 'is' ? 'is' : 'is not';
-    return `${label} ${op} ${c.value}`;
+    const v = c.value;
+    const not = c.operator === 'is_not';
+    switch (c.attribute) {
+      case 'location_country':
+      case 'location_state':
+        return not ? `Employees not in ${v}` : `Employees in ${v}`;
+      case 'department':
+        return not ? `Non-${v} department` : `${v} department`;
+      case 'division':
+        return not ? `Non-${v} division` : `${v} division`;
+      case 'employment_status':
+        return not ? `Non-${v} employees` : `${v} employees`;
+      case 'team':
+        return not ? `Non-${v} team` : `${v} team`;
+      case 'person':
+        return v;
+      default:
+        return `${c.attribute} ${c.operator === 'is' ? 'is' : 'is not'} ${v}`;
+    }
   });
   const joiner = filter.logic === 'AND' ? ' and ' : ' or ';
   return parts.join(joiner);

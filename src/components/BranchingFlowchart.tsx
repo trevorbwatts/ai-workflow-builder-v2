@@ -87,11 +87,12 @@ interface SingleFlowchartProps {
   ruleId: string;
   startDelay?: number;
   onNodeClick?: (ruleId: string, nodeId: string, rect: DOMRect) => void;
+  onSuggest?: (prompt: string) => void;
   validationNodeIds: Set<string>;
 }
 
 const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
-  steps, offsetX, ruleId, startDelay = 0, onNodeClick, validationNodeIds,
+  steps, offsetX, ruleId, startDelay = 0, onNodeClick, onSuggest, validationNodeIds,
 }) => {
   const labelElsRef = useRef<(HTMLDivElement | null)[]>([]);
   const [labelHeights, setLabelHeights] = useState<number[]>(() =>
@@ -105,6 +106,13 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
 
   const { items, totalH } = calcLayout(steps, labelHeights);
 
+  // Detect if any non-fork approval step will render a ghost suggestion
+  const hasGhost = !!onSuggest && steps.some(s =>
+    s.kind === 'notify' && s.actor && !s.backup && !steps.some(s2 => s2.kind === 'fork' || s2.kind === 'condition_fork')
+  );
+  const GHOST_LW = 160;
+  const TOTAL_W = hasGhost ? BRANCH_W + 200 : BRANCH_W;
+
   const pathEls: React.ReactElement[] = [];
   const nodeEls: React.ReactElement[] = [];
   let t = startDelay;
@@ -117,17 +125,18 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
   const sRXBase = RX_OFF + offsetX;
   const fcRXBase = FC_RX_OFF + offsetX;
 
-  const addPath = (d: string, dur: number, at?: number) => {
+  const addPath = (d: string, dur: number, at?: number, dashed?: boolean) => {
     const delay = at ?? t;
     pathEls.push(
       <motion.path
         key={`p-${ruleId}-${pk++}`}
         d={d}
-        stroke="#94a3b8"
+        stroke={dashed ? '#cbd5e1' : '#94a3b8'}
         strokeWidth={1.5}
         fill="none"
         strokeLinecap="round"
         strokeLinejoin="round"
+        strokeDasharray={dashed ? '5 4' : undefined}
         initial={{ pathLength: 0 }}
         animate={{ pathLength: 1 }}
         transition={{ delay, duration: dur, ease: 'easeInOut' }}
@@ -146,7 +155,6 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
   ) => {
     const hasValidationIssue = nodeId ? validationNodeIds.has(nodeId) : false;
     const ringClass = hasValidationIssue ? 'ring-2 ring-red-400 ring-offset-1' : '';
-    const clickable = nodeId && onNodeClick;
 
     nodeEls.push(
       <motion.div
@@ -155,14 +163,7 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
         initial={{ scale: 0, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ delay: t, type: 'spring', stiffness: 380, damping: 24 }}
-        className={`rounded-full border-2 flex items-center justify-center ${bg} ${border} ${ringClass} ${
-          clickable ? 'cursor-pointer hover:ring-2 hover:ring-indigo-300 hover:ring-offset-1' : ''
-        }`}
-        onClick={clickable ? (e: React.MouseEvent) => {
-          e.stopPropagation();
-          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          onNodeClick!(ruleId, nodeId!, rect);
-        } : undefined}
+        className={`rounded-full border-2 flex items-center justify-center ${bg} ${border} ${ringClass}`}
       >
         <Icon size={16} className={iconCls} {...(iconProps ?? {})} />
       </motion.div>
@@ -175,7 +176,11 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
     chips?: string[],
     refCallback?: (el: HTMLDivElement | null) => void,
     actor?: string,
+    clickNodeId?: string,
+    suggestion?: string,       // e.g. "+Add Backup Approvers"
+    suggestionPrompt?: string, // sent to AI when suggestion is clicked
   ) => {
+    const clickable = clickNodeId && onNodeClick;
     nodeEls.push(
       <div
         key={`l-${ruleId}-${nk++}`}
@@ -187,7 +192,14 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: t + 0.10, duration: 0.30 }}
-          className="rounded-xl border px-3 py-2.5 bg-white border-slate-200 shadow-sm"
+          className={`rounded-xl border px-3 py-2.5 bg-white border-slate-200 shadow-sm ${
+            clickable ? 'cursor-pointer hover:border-indigo-300 hover:shadow-md transition-shadow' : ''
+          }`}
+          onClick={clickable ? (e: React.MouseEvent) => {
+            e.stopPropagation();
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            onNodeClick!(ruleId, clickNodeId!, rect);
+          } : undefined}
         >
           <p className="text-[12px] font-semibold text-slate-700 leading-snug">
             {actor
@@ -204,6 +216,17 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
             </div>
           )}
           {sub && <p className="text-[11px] text-slate-500 mt-1 leading-snug">{sub}</p>}
+          {suggestion && (
+            <button
+              onClick={onSuggest && suggestionPrompt ? (e) => {
+                e.stopPropagation();
+                onSuggest(suggestionPrompt);
+              } : undefined}
+              className="mt-2 text-[10px] font-medium text-slate-400 border border-dashed border-slate-300 rounded-lg px-2 py-1 hover:border-indigo-300 hover:text-indigo-500 transition-colors w-full"
+            >
+              {suggestion}
+            </button>
+          )}
         </motion.div>
       </div>
     );
@@ -262,8 +285,13 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
     const subText = isEnd ? 'Email sent to employee.' : undefined;
     const chips = (!isStart && !isEnd) ? ['Inbox', 'Email'] : undefined;
 
+    // Show "+Add Backup Approvers" suggestion on approval step labels
+    const showBackupSuggestion = !isStart && !isEnd && step.actor && !step.backup;
     addLabel(sX, labelY, MAIN_LW, mainText, subText, chips,
-      (el) => { labelElsRef.current[i] = el; }, actor);
+      (el) => { labelElsRef.current[i] = el; }, actor,
+      (!isStart && !isEnd && step.nodeId) ? step.nodeId : undefined,
+      showBackupSuggestion ? '+Add Backup Approvers' : undefined,
+      showBackupSuggestion ? `Add a backup approver for when ${step.actor} is unavailable` : undefined);
     t += DU * 1.3;
 
     if (isA) {
@@ -366,6 +394,42 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
         addLabel(sRX, branchLabelY!, BR_LW, 'Rejected', 'Email is sent to Employee');
         t += DU * 1.4;
 
+        // Ghost "No Response" suggestion — dashed, to the right of Rejected
+        // ghostX is far enough right that its label (GHOST_LW=160) doesn't overlap Rejected
+        if (!isForkChild && onSuggest) {
+          const ghostX = sRXBase + 220; // 640 — clear of Rejected label right edge at ~534
+          const ghostPrompt = `Add a no response rule: if the approver doesn't respond within 3 days, escalate to their manager`;
+          addPath(
+            `M ${sX},${splitY} L ${ghostX - R},${splitY} Q ${ghostX},${splitY} ${ghostX},${splitY + R} L ${ghostX},${branchY! - NR}`,
+            0.25, undefined, true
+          );
+          nodeEls.push(
+            <motion.div
+              key={`ghost-node-${ruleId}-${nk++}`}
+              style={{ position: 'absolute', left: ghostX - NR, top: branchY! - NR, width: ND, height: ND }}
+              initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+              transition={{ delay: t, type: 'spring', stiffness: 380, damping: 24 }}
+              className="rounded-full border-2 border-dashed border-slate-300 bg-white flex items-center justify-center"
+            >
+              <Clock size={14} className="text-slate-300" />
+            </motion.div>
+          );
+          nodeEls.push(
+            <div key={`ghost-label-${ruleId}-${nk++}`} style={{ position: 'absolute', left: ghostX, top: branchLabelY!, transform: 'translateX(-50%)' }}>
+              <motion.button
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                transition={{ delay: t + 0.1, duration: 0.3 }}
+                onClick={() => onSuggest(ghostPrompt)}
+                style={{ width: 'max-content', maxWidth: GHOST_LW, textAlign: 'center' }}
+                className="rounded-xl border border-dashed border-slate-300 px-3 py-2.5 bg-white/80 text-slate-400 hover:border-indigo-300 hover:text-indigo-500 transition-colors cursor-pointer"
+              >
+                <p className="text-[11px] font-semibold leading-snug">No Response rule?</p>
+                <p className="text-[10px] mt-0.5">+ Add timeout & escalation</p>
+              </motion.button>
+            </div>
+          );
+        }
+
         if (!skippedItemIndices.has(i + 1)) {
           if (isForkChild) {
             if (next) {
@@ -394,9 +458,9 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
   });
 
   return (
-    <div className="relative" style={{ width: BRANCH_W, height: totalH }}>
+    <div className="relative" style={{ width: TOTAL_W, height: totalH }}>
       <svg
-        width={BRANCH_W}
+        width={TOTAL_W}
         height={totalH}
         style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
       >
@@ -451,11 +515,12 @@ interface BranchingFlowchartProps {
   activeRuleId: string;
   workflowName: string;
   onNodeClick?: (ruleId: string, nodeId: string, rect: DOMRect) => void;
+  onSuggest?: (prompt: string) => void;
   validationIssues: ValidationIssue[];
 }
 
 export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
-  rules, activeRuleId, workflowName, onNodeClick, validationIssues,
+  rules, activeRuleId, workflowName, onNodeClick, onSuggest, validationIssues,
 }) => {
   const validationNodeIds = new Set(
     validationIssues.filter((i) => i.nodeId).map((i) => i.nodeId!)
@@ -518,6 +583,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
             ruleId={rule.id}
             startDelay={0.5}
             onNodeClick={onNodeClick}
+            onSuggest={onSuggest}
             validationNodeIds={validationNodeIds}
           />
         </div>
@@ -639,6 +705,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
               ruleId={rule.id}
               startDelay={0.7}
               onNodeClick={onNodeClick}
+              onSuggest={onSuggest}
               validationNodeIds={validationNodeIds}
             />
           );
