@@ -272,6 +272,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
                 workflowName={workflow.name}
                 onNodeClick={handleNodeClick}
                 onSuggest={handleSuggest}
+                onOpenAssistant={() => setChatOpen(true)}
                 validationIssues={validationIssues}
               />
             </PannableCanvas>
@@ -279,16 +280,16 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
             {/* Floating prompt bar */}
             <AnimatePresence>
               {!chatOpen && (
-                <div style={{ position: 'absolute', bottom: 28, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+                <div style={{ position: 'absolute', bottom: 48, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
                   <motion.div
                     initial={{ opacity: 0, y: 16 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 16 }}
                     transition={{ type: 'spring', damping: 28, stiffness: 220, delay: 0.2 }}
-                    style={{ pointerEvents: 'auto', width: '100%', maxWidth: 560, padding: '0 16px' }}
+                    style={{ pointerEvents: 'auto', width: '100%', maxWidth: 640, padding: '0 16px' }}
                   >
                     <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
-                      <div className="flex items-center gap-3 px-4 py-3.5">
+                      <div className="flex items-center gap-3 px-5 py-5">
                         <Sparkles size={16} className="text-indigo-500 shrink-0" />
                         <div className="flex-1 relative">
                           <input

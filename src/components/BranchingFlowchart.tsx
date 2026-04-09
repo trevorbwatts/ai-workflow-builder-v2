@@ -31,7 +31,7 @@ const G = {
 const MAIN_LW = 312;
 const BR_LW = 228;
 const BR_FORK_LW = 140;
-const DU = 0.18;
+const DU = 0.09;
 
 // ─── Step Layout ─────────────────────────────────────────────────────────────
 
@@ -88,11 +88,12 @@ interface SingleFlowchartProps {
   startDelay?: number;
   onNodeClick?: (ruleId: string, nodeId: string, rect: DOMRect) => void;
   onSuggest?: (prompt: string) => void;
+  onOpenAssistant?: () => void;
   validationNodeIds: Set<string>;
 }
 
 const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
-  steps, offsetX, ruleId, startDelay = 0, onNodeClick, onSuggest, validationNodeIds,
+  steps, offsetX, ruleId, startDelay = 0, onNodeClick, onSuggest, onOpenAssistant, validationNodeIds,
 }) => {
   const labelElsRef = useRef<(HTMLDivElement | null)[]>([]);
   const [labelHeights, setLabelHeights] = useState<number[]>(() =>
@@ -107,7 +108,7 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
   const { items, totalH } = calcLayout(steps, labelHeights);
 
   // Detect if any non-fork approval step will render a ghost suggestion
-  const hasGhost = !!onSuggest && steps.some(s =>
+  const hasGhost = !!onOpenAssistant && steps.some(s =>
     s.kind === 'notify' && s.actor && !s.backup && !steps.some(s2 => s2.kind === 'fork' || s2.kind === 'condition_fork')
   );
   const GHOST_LW = 160;
@@ -177,8 +178,7 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
     refCallback?: (el: HTMLDivElement | null) => void,
     actor?: string,
     clickNodeId?: string,
-    suggestion?: string,       // e.g. "+Add Backup Approvers"
-    suggestionPrompt?: string, // sent to AI when suggestion is clicked
+    suggestion?: string,       // e.g. "+Add Backup Approvers" — clicks open NodeEditor for clickNodeId
   ) => {
     const clickable = clickNodeId && onNodeClick;
     nodeEls.push(
@@ -191,7 +191,7 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
           style={{ width: 'max-content', maxWidth: maxW, textAlign: 'center' }}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: t + 0.10, duration: 0.30 }}
+          transition={{ delay: t + 0.05, duration: 0.15 }}
           className={`rounded-xl border px-3 py-2.5 bg-white border-slate-200 shadow-sm ${
             clickable ? 'cursor-pointer hover:border-indigo-300 hover:shadow-md transition-shadow' : ''
           }`}
@@ -218,9 +218,10 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
           {sub && <p className="text-[11px] text-slate-500 mt-1 leading-snug">{sub}</p>}
           {suggestion && (
             <button
-              onClick={onSuggest && suggestionPrompt ? (e) => {
+              onClick={clickNodeId && onNodeClick ? (e) => {
                 e.stopPropagation();
-                onSuggest(suggestionPrompt);
+                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                onNodeClick(ruleId, clickNodeId, rect);
               } : undefined}
               className="mt-2 text-[10px] font-medium text-slate-400 border border-dashed border-slate-300 rounded-lg px-2 py-1 hover:border-indigo-300 hover:text-indigo-500 transition-colors w-full"
             >
@@ -290,8 +291,7 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
     addLabel(sX, labelY, MAIN_LW, mainText, subText, chips,
       (el) => { labelElsRef.current[i] = el; }, actor,
       (!isStart && !isEnd && step.nodeId) ? step.nodeId : undefined,
-      showBackupSuggestion ? '+Add Backup Approvers' : undefined,
-      showBackupSuggestion ? `Add a backup approver for when ${step.actor} is unavailable` : undefined);
+      showBackupSuggestion ? '+Add Backup Approvers' : undefined);
     t += DU * 1.3;
 
     if (isA) {
@@ -396,12 +396,24 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
 
         // Ghost "No Response" suggestion — dashed, to the right of Rejected
         // ghostX is far enough right that its label (GHOST_LW=160) doesn't overlap Rejected
-        if (!isForkChild && onSuggest) {
+        if (!isForkChild && onOpenAssistant) {
           const ghostX = sRXBase + 220; // 640 — clear of Rejected label right edge at ~534
-          const ghostPrompt = `Add a no response rule: if the approver doesn't respond within 3 days, escalate to their manager`;
-          addPath(
-            `M ${sX},${splitY} L ${ghostX - R},${splitY} Q ${ghostX},${splitY} ${ghostX},${splitY + R} L ${ghostX},${branchY! - NR}`,
-            0.25, undefined, true
+          // unshift so this path renders behind the Rejected branch line in the SVG
+          // Use opacity animation (not pathLength) so strokeDasharray isn't overridden by Framer Motion
+          pathEls.unshift(
+            <motion.path
+              key={`p-ghost-${ruleId}`}
+              d={`M ${sX},${splitY} L ${ghostX - R},${splitY} Q ${ghostX},${splitY} ${ghostX},${splitY + R} L ${ghostX},${branchY! - NR}`}
+              stroke="#cbd5e1"
+              strokeWidth={1.5}
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray="5 4"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: t, duration: 0.25 }}
+            />
           );
           nodeEls.push(
             <motion.div
@@ -418,13 +430,13 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
             <div key={`ghost-label-${ruleId}-${nk++}`} style={{ position: 'absolute', left: ghostX, top: branchLabelY!, transform: 'translateX(-50%)' }}>
               <motion.button
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                transition={{ delay: t + 0.1, duration: 0.3 }}
-                onClick={() => onSuggest(ghostPrompt)}
+                transition={{ delay: t + 0.05, duration: 0.15 }}
+                onClick={() => onOpenAssistant()}
                 style={{ width: 'max-content', maxWidth: GHOST_LW, textAlign: 'center' }}
-                className="rounded-xl border border-dashed border-slate-300 px-3 py-2.5 bg-white/80 text-slate-400 hover:border-indigo-300 hover:text-indigo-500 transition-colors cursor-pointer"
+                className="rounded-xl border border-dashed border-slate-300 px-3 py-2.5 bg-white/80 hover:border-indigo-300 hover:text-indigo-500 transition-colors cursor-pointer"
               >
-                <p className="text-[11px] font-semibold leading-snug">No Response rule?</p>
-                <p className="text-[10px] mt-0.5">+ Add timeout & escalation</p>
+                <p className="text-[11px] font-semibold leading-snug"><span className="text-slate-600">+Add an </span><span className="text-amber-600">Escalation Rule</span></p>
+                <p className="text-[10px] text-slate-400 mt-0.5">What should happen if there is no response?</p>
               </motion.button>
             </div>
           );
@@ -516,11 +528,12 @@ interface BranchingFlowchartProps {
   workflowName: string;
   onNodeClick?: (ruleId: string, nodeId: string, rect: DOMRect) => void;
   onSuggest?: (prompt: string) => void;
+  onOpenAssistant?: () => void;
   validationIssues: ValidationIssue[];
 }
 
 export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
-  rules, activeRuleId, workflowName, onNodeClick, onSuggest, validationIssues,
+  rules, activeRuleId, workflowName, onNodeClick, onSuggest, onOpenAssistant, validationIssues,
 }) => {
   const validationNodeIds = new Set(
     validationIssues.filter((i) => i.nodeId).map((i) => i.nodeId!)
@@ -549,7 +562,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
             x2={rootCX} y2={firstNodeAbsY - NR}
             stroke="#94a3b8" strokeWidth={1.5} strokeLinecap="round"
             initial={{ pathLength: 0 }} animate={{ pathLength: 1 }}
-            transition={{ delay: 0.2, duration: 0.3, ease: 'easeInOut' }}
+            transition={{ delay: 0.1, duration: 0.15, ease: 'easeInOut' }}
           />
         </svg>
 
@@ -568,7 +581,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
           <motion.div
             style={{ width: 'max-content', maxWidth: MAIN_LW, textAlign: 'center' }}
             initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            transition={{ delay: 0.15, duration: 0.3 }}
+            transition={{ delay: 0.075, duration: 0.15 }}
             className="rounded-xl border px-3 py-2.5 bg-white border-slate-200 shadow-sm"
           >
             <p className="text-[12px] font-semibold text-slate-700 leading-snug">{workflowName}</p>
@@ -584,6 +597,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
             startDelay={0.5}
             onNodeClick={onNodeClick}
             onSuggest={onSuggest}
+            onOpenAssistant={onOpenAssistant}
             validationNodeIds={validationNodeIds}
           />
         </div>
@@ -628,7 +642,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
           x2={rootCX} y2={SPLIT_Y}
           stroke="#94a3b8" strokeWidth={1.5} strokeLinecap="round"
           initial={{ pathLength: 0 }} animate={{ pathLength: 1 }}
-          transition={{ delay: 0.2, duration: 0.2, ease: 'easeInOut' }}
+          transition={{ delay: 0.1, duration: 0.1, ease: 'easeInOut' }}
         />
 
         {/* Rounded arm to each branch */}
@@ -644,7 +658,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
               strokeLinecap="round"
               strokeLinejoin="round"
               initial={{ pathLength: 0 }} animate={{ pathLength: 1 }}
-              transition={{ delay: 0.3, duration: 0.35, ease: 'easeInOut' }}
+              transition={{ delay: 0.15, duration: 0.175, ease: 'easeInOut' }}
             />
           );
         })}
@@ -664,7 +678,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
       <div style={{ position: 'absolute', left: rootCX, top: FLAG_LABEL_Y, transform: 'translateX(-50%)', textAlign: 'center' }}>
         <motion.div
           initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-          transition={{ delay: 0.15, duration: 0.3 }}
+          transition={{ delay: 0.075, duration: 0.15 }}
           className="rounded-xl border px-3 py-2.5 bg-white border-slate-200 shadow-sm whitespace-nowrap"
         >
           <p className="text-[12px] font-semibold text-slate-700 leading-snug">{workflowName}</p>
@@ -684,7 +698,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
           >
             <motion.div
               initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.5 }}
+              transition={{ delay: 0.25 }}
               className="rounded-xl border px-3 py-2 bg-indigo-50 border-indigo-200 shadow-sm whitespace-nowrap"
             >
               <p className="text-[12px] font-semibold text-indigo-700 leading-snug">{label}</p>
@@ -706,6 +720,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
               startDelay={0.7}
               onNodeClick={onNodeClick}
               onSuggest={onSuggest}
+              onOpenAssistant={onOpenAssistant}
               validationNodeIds={validationNodeIds}
             />
           );
