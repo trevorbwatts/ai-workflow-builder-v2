@@ -484,15 +484,14 @@ const SingleFlowchart: React.FC<SingleFlowchartProps> = ({
 };
 
 // ─── Smart branch label ───────────────────────────────────────────────────────
-// Picks the right differentiating label for a rule given all sibling rules.
-// When all rules share the same scope, uses time_off_type as the differentiator.
-// When scopes differ, uses scope. When both differ, combines them.
+// Returns the scope and time-off-type parts separately so they can be rendered
+// as two stacked pills. Either part may be null if not applicable.
 
-function getRuleBranchLabel(rule: WorkflowRule, allRules: WorkflowRule[]): string {
+function getRuleBranchParts(rule: WorkflowRule, allRules: WorkflowRule[]): { scope: string | null; timeOff: string | null } {
   const allSameScope = allRules.every((r) => r.filter === null)
     || allRules.every((r) => JSON.stringify(r.filter) === JSON.stringify(allRules[0].filter));
 
-  const scopePart = allSameScope
+  const scope = allSameScope
     ? null
     : rule.filter === null
       ? 'All other employees'
@@ -501,15 +500,20 @@ function getRuleBranchLabel(rule: WorkflowRule, allRules: WorkflowRule[]): strin
   const timeOffVal = rule.nodes.time_off_type?.value as TimeOffTypeValue | undefined;
   const timeOffAttr = timeOffVal?.attribute;
   const anyTimeOff = allRules.some((r) => r.nodes.time_off_type);
-  const timeOffPart = anyTimeOff && timeOffAttr
+  const timeOff = anyTimeOff && timeOffAttr
     ? timeOffAttr === 'all_other' ? 'All other time-off types'
     : timeOffAttr === 'all' ? 'All other time-off requests'
     : displayTimeOffTypeValue(timeOffVal!)
     : null;
 
-  if (scopePart && timeOffPart) return `${scopePart} · ${timeOffPart}`;
-  if (timeOffPart) return timeOffPart;
-  if (scopePart) return scopePart;
+  return { scope, timeOff };
+}
+
+function getRuleBranchLabel(rule: WorkflowRule, allRules: WorkflowRule[]): string {
+  const { scope, timeOff } = getRuleBranchParts(rule, allRules);
+  if (scope && timeOff) return `${scope} · ${timeOff}`;
+  if (timeOff) return timeOff;
+  if (scope) return scope;
   return 'All employees';
 }
 
@@ -539,7 +543,21 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
     validationIssues.filter((i) => i.nodeId).map((i) => i.nodeId!)
   );
 
-  const totalW = rules.length === 1 ? BRANCH_W : rules.length * BRANCH_W;
+  // Per-branch widths: branches with a ghost suggestion card need extra horizontal room
+  const branchWidths = rules.map((rule) => {
+    if (rules.length === 1) return BRANCH_W;
+    const steps = parseWorkflowSteps(rule.template, rule.nodes);
+    const branchHasGhost = !!onOpenAssistant && steps.some(s =>
+      s.kind === 'notify' && s.actor && !s.backup &&
+      !steps.some(s2 => s2.kind === 'fork' || s2.kind === 'condition_fork')
+    );
+    return branchHasGhost ? BRANCH_W + 200 : BRANCH_W;
+  });
+  // Cumulative left offset for each branch in the flex layout
+  const branchLefts = branchWidths.map((_, i) =>
+    branchWidths.slice(0, i).reduce((a, b) => a + b, 0)
+  );
+  const totalW = rules.length === 1 ? BRANCH_W : branchWidths.reduce((a, b) => a + b, 0);
   const rootCX = totalW / 2;
 
   // Single rule: flag → line → SingleFlowchart
@@ -609,7 +627,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
   const R = 18; // corner radius, matches SingleFlowchart fork paths
   const SPLIT_Y = FLAG_LABEL_Y + FLAG_LABEL_H + 20;      // y where arms split horizontally
   const BRANCH_LABEL_H = 26;
-  const BRANCH_START_Y = SPLIT_Y + 80;                   // y where SingleFlowcharts start
+  const BRANCH_START_Y = SPLIT_Y + 120;                  // y where SingleFlowcharts start (extra room for two stacked pills)
   const firstNodeAbsY = BRANCH_START_Y + G.TOP + NR;     // abs y of first node in each branch
 
   const isActive = (id: string) => id === activeRuleId;
@@ -647,7 +665,7 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
 
         {/* Rounded arm to each branch */}
         {rules.map((rule, i) => {
-          const branchCX = i * BRANCH_W + BRANCH_CX;
+          const branchCX = branchLefts[i] + BRANCH_CX;
           return (
             <motion.path
               key={`arm-${rule.id}`}
@@ -685,24 +703,33 @@ export const BranchingFlowchart: React.FC<BranchingFlowchartProps> = ({
         </motion.div>
       </div>
 
-      {/* Branch scope labels — centered on the vertical arm segment */}
+      {/* Branch scope labels — centered on the vertical arm segment, shown as two stacked pills */}
       {rules.map((rule, i) => {
-        const branchCX = i * BRANCH_W + BRANCH_CX;
-        const label = getRuleBranchLabel(rule, rules);
+        const branchCX = branchLefts[i] + BRANCH_CX;
+        const { scope, timeOff } = getRuleBranchParts(rule, rules);
         const labelY = SPLIT_Y + R + 12;
+        const pillCls = 'rounded-xl border px-3 py-2 bg-indigo-50 border-indigo-200 shadow-sm whitespace-nowrap';
+        const textCls = 'text-[12px] font-semibold text-indigo-700 leading-snug';
         return (
-          // Outer div handles centering; inner motion.div handles animation (avoids transform conflict)
           <div
             key={`label-${rule.id}`}
-            style={{ position: 'absolute', left: branchCX, top: labelY, transform: 'translateX(-50%)' }}
+            style={{ position: 'absolute', left: branchCX, top: labelY, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}
           >
-            <motion.div
-              initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.25 }}
-              className="rounded-xl border px-3 py-2 bg-indigo-50 border-indigo-200 shadow-sm whitespace-nowrap"
-            >
-              <p className="text-[12px] font-semibold text-indigo-700 leading-snug">{label}</p>
-            </motion.div>
+            {scope && (
+              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className={pillCls}>
+                <p className={textCls}>{scope}</p>
+              </motion.div>
+            )}
+            {timeOff && (
+              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.30 }} className={pillCls}>
+                <p className={textCls}>{timeOff}</p>
+              </motion.div>
+            )}
+            {!scope && !timeOff && (
+              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className={pillCls}>
+                <p className={textCls}>All employees</p>
+              </motion.div>
+            )}
           </div>
         );
       })}
